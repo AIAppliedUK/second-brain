@@ -1,0 +1,81 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "second-brain"
+version = "0.1.0"
+description = "Local-first second brain with PostgreSQL, pgvector, OneNote ingestion, and MCP access."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "psycopg[binary]>=3.2,<4.0",
+  "python-docx>=1.1,<2.0",
+  "python-dotenv>=1.0,<2.0",
+  "pypdf>=5.0,<6.0",
+  "mcp>=1.10,<2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9.0",
+  "pytest-cov>=6.0,<7.0",
+  "ruff>=0.11,<0.12",
+]
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = [
+  "apps/ingester/src",
+  "apps/retriever/src",
+  "apps/mcp-server/src",
+  "libs/core/src",
+  "libs/models/src",
+  "libs/file-ingest/src",
+  "libs/one-note/src",
+]
+include = [
+  "second_brain_ingester*",
+  "second_brain_retriever*",
+  "second_brain_mcp_server*",
+  "second_brain_core*",
+  "second_brain_models*",
+  "second_brain_file_ingest*",
+  "second_brain_one_note*",
+]
+
+[tool.pytest.ini_options]
+pythonpath = [
+  "apps/ingester/src",
+  "apps/retriever/src",
+  "apps/mcp-server/src",
+  "libs/core/src",
+  "libs/models/src",
+  "libs/file-ingest/src",
+  "libs/one-note/src",
+]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = [
+  "apps/ingester/src",
+  "apps/retriever/src",
+  "apps/mcp-server/src",
+  "libs/core/src",
+  "libs/models/src",
+  "libs/file-ingest/src",
+  "libs/one-note/src",
+  "tests",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "SIM"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

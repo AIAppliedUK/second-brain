@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: second-brain-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: second_brain
+      POSTGRES_USER: second_brain
+      POSTGRES_PASSWORD: second_brain
+    ports:
+      - "${SECOND_BRAIN_DB_PORT:-55432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U second_brain -d second_brain"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  postgres-data:
