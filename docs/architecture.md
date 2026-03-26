@@ -49,6 +49,11 @@ Implementation notes:
 
 Use Microsoft Graph with delegated authentication only.
 
+This requires a Microsoft Entra app registration configured for delegated Graph
+access. The runtime expects a tenant ID plus client ID in environment
+configuration before OneNote sync can succeed. This is an external setup
+prerequisite, not something the runtime provisions for you.
+
 Implementation notes:
 
 - sync notebooks, sections, and pages from Graph `/me/onenote/*`
@@ -198,4 +203,3 @@ v1 foundation is complete when:
 - retrieval returns citations and provenance
 - an MCP server exposes the memory system over stdio
 - tests cover chunking, ingestion, retrieval, and MCP tools
-

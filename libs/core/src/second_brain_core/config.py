@@ -35,6 +35,19 @@ def _split_csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _default_onenote_token_cache_path() -> Path:
+    return Path.home() / ".second-brain" / "onenote-token.json"
+
+
+def _parse_bool(value: str, default: bool = False) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 @dataclass(slots=True)
 class MemoryRoot:
     scope: str
@@ -84,11 +97,22 @@ class Settings:
     )
     onenote_scopes: list[str] = field(
         default_factory=lambda: _split_csv(
-            os.getenv("SECOND_BRAIN_ONENOTE_SCOPES", "offline_access,Notes.Read,User.Read")
+            os.getenv("SECOND_BRAIN_ONENOTE_SCOPES", "offline_access,Notes.Read.All,User.Read")
         )
     )
-    onenote_redirect_uri: str = field(
-        default_factory=lambda: os.getenv("SECOND_BRAIN_ONENOTE_REDIRECT_URI", "http://localhost")
+    onenote_token_cache_path: Path = field(
+        default_factory=lambda: Path(
+            os.getenv(
+                "SECOND_BRAIN_ONENOTE_TOKEN_CACHE_PATH",
+                str(_default_onenote_token_cache_path()),
+            )
+        ).expanduser()
+    )
+    onenote_auto_open_browser: bool = field(
+        default_factory=lambda: _parse_bool(
+            os.getenv("SECOND_BRAIN_ONENOTE_AUTO_OPEN_BROWSER", "true"),
+            default=True,
+        )
     )
     onenote_timeout_seconds: int = field(
         default_factory=lambda: int(os.getenv("SECOND_BRAIN_ONENOTE_TIMEOUT_SECONDS", "30"))

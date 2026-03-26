@@ -1,18 +1,92 @@
 # second-brain
 
-Local-first second brain built around PostgreSQL + pgvector, PostgreSQL full-text search with `tsvector`, local files and OneNote as input sources, hybrid RAG retrieval, and an MCP server for Codex and Claude.
+Local-first memory infrastructure for AI agents and personal knowledge retrieval.
 
-## What v1 includes
+This project ingests local files and, when Microsoft Entra plus Microsoft Graph
+delegated auth are configured, OneNote content into PostgreSQL. It indexes that
+content with both `pgvector` and PostgreSQL full-text search, and exposes the
+memory through an MCP server for Claude and Codex.
 
-- Python 3.12-oriented project layout with app and library boundaries
-- Docker Compose for local PostgreSQL with `pgvector`
-- `sources`, `chunks`, and `audit_log` schema with provenance-first fields
-- first-class memory scopes for general and project-specific memories in one stack
-- Hybrid retrieval using lexical `tsvector` search, vector similarity, and metadata filters
-- Local file ingestion for markdown, txt, pdf, and docx
-- OneNote ingestion through Microsoft Graph delegated authentication only
-- stdio MCP server exposing `search_memory`, `get_source`, `get_chunk_context`, and `list_sources`
-- Tests for chunking, retrieval, ingestion, OneNote sync logic, and MCP service behaviour
+Important: local file ingestion is the straightforward path. OneNote sync is
+not zero-config and requires separate Microsoft Entra setup before
+`ingest-onenote` will work.
+
+## What it does
+
+This is a read-mostly second brain with PostgreSQL as the system of record for retrieval.
+
+It is designed to help with:
+
+- project memory for codebases, docs, architecture notes, and ADRs
+- general memory for personal notes and reference material
+- hybrid retrieval for agents that need both exact-match and semantic recall
+- provenance-first answers with citations back to the original source and chunk
+
+The core flow is:
+
+1. ingest content from local files or OneNote
+2. normalize it into canonical source records
+3. chunk and index it in PostgreSQL
+4. query it with hybrid lexical plus vector retrieval
+5. expose it to AI tools through MCP
+
+## Key capabilities
+
+- PostgreSQL with `pgvector` and generated stored `tsvector`
+- hybrid retrieval using:
+  - lexical search with `websearch_to_tsquery` and `ts_rank_cd`
+  - vector similarity with `pgvector`
+  - metadata and memory-scope filters
+- local file ingestion with incremental change detection
+- OneNote ingestion via Microsoft Graph delegated auth only, with separate
+  Microsoft Entra app registration required
+- memory scopes so one stack can serve multiple project memories plus a general memory
+- stdio MCP server exposing:
+  - `search_memory`
+  - `get_source`
+  - `get_chunk_context`
+  - `list_sources`
+- provenance and citations on retrieval results
+- tests for chunking, retrieval, ingestion, OneNote sync, and MCP behavior
+
+## How it works
+
+### Storage model
+
+The database has three main tables:
+
+- `sources`
+  - one canonical row per source document or OneNote page
+  - stores metadata, timestamps, content hash, title, URI, and raw/canonical content
+- `chunks`
+  - retrieval units derived from a source
+  - stores chunk text, heading path, metadata, embedding, and generated stored `tsv`
+- `audit_log`
+  - ingestion and indexing events
+
+### Retrieval model
+
+Retrieval is hybrid by design, not vector-only.
+
+For each search request the retriever:
+
+1. runs lexical search against `chunks.tsv`
+2. runs vector search against `chunks.embedding`
+3. applies the same memory-scope and metadata filters to both
+4. merges both candidate sets with weighted reciprocal-rank fusion
+5. returns results with source metadata and citation payloads
+
+### Memory scopes
+
+Memory scopes let you keep multiple memories separate while using one local stack.
+
+Typical scopes:
+
+- `general`
+- `project:second-brain`
+- `project:ai-recruitment`
+
+This means you can use one Postgres instance and one MCP server, but still retrieve only the memory relevant to the current project.
 
 ## Repository layout
 
@@ -33,139 +107,308 @@ second-brain/
   tests/
 ```
 
-## Local setup
+## Setup
 
-1. Use Python 3.12 for local development. The code also compiles on newer Python versions, but v1 targets 3.12.
-2. Copy `.env.example` to `.env` and fill in the OneNote delegated auth settings if you plan to sync OneNote.
-   The shared configuration layer auto-loads `.env` for normal local runs, so you do not need to manually export each variable first.
-3. Create a virtual environment and install dependencies:
+### 1. Requirements
+
+- Python 3.12 is the target baseline for the project
+- Docker Desktop or equivalent Docker runtime
+- if you want OneNote sync, a Microsoft Entra app registration with delegated
+  Microsoft Graph permissions
+
+Newer Python versions may work, but the documented target is Python 3.12.
+
+### 2. If you need OneNote, set up Microsoft Entra first
+
+OneNote sync depends on an existing Microsoft Entra app registration. Copying
+`.env.example` is not enough by itself.
+
+1. Create or choose a Microsoft Entra app registration for delegated sign-in.
+2. Configure delegated Microsoft Graph permissions for `Notes.Read.All`,
+   `User.Read`, and `offline_access`.
+3. Note the app's client ID and the tenant you want to authenticate against.
+4. Then continue with the local project setup below and place those values in
+   `.env`.
+
+If you only want local file ingestion, you can skip this step.
+
+### 3. Configure local environment
+
+Copy [`.env.example`](/Users/davidmcnabb/projects/second-brain/.env.example) to [`.env`](/Users/davidmcnabb/projects/second-brain/.env).
+
+```bash
+cp .env.example .env
+```
+
+The config layer auto-loads `.env`, so you do not need to manually export each variable.
+
+If you are not using OneNote, you can leave the OneNote settings empty.
+
+### 4. Bootstrap the project
 
 ```bash
 make bootstrap
 ```
 
-4. Start PostgreSQL:
+### 5. Start PostgreSQL
 
 ```bash
 make up
 ```
 
-By default, the container binds PostgreSQL to host port `55432` instead of `5432`, so it should not clash with other local databases. If you want a different host port, change `SECOND_BRAIN_DB_PORT` in your local `.env`.
+By default, PostgreSQL binds to host port `55432` so it does not clash with local databases already using `5432`.
 
-The database comes up with `pgvector` enabled and initializes:
+## Environment variables
 
-- `sources` as the canonical source record table
-- `chunks` as retrieval units with `embedding` and generated stored `tsv`
-- `audit_log` for ingestion and indexing events
+Important settings:
 
-### Scoped memories
+- `SECOND_BRAIN_DB_PORT`
+- `SECOND_BRAIN_DB_DSN`
+- `SECOND_BRAIN_EMBEDDING_DIMENSION`
+- `SECOND_BRAIN_DEFAULT_MEMORY_SCOPE`
+- `SECOND_BRAIN_MEMORY_ROOTS`
+- `SECOND_BRAIN_MCP_SERVER_NAME`
+- `SECOND_BRAIN_ONENOTE_TENANT_ID`
+- `SECOND_BRAIN_ONENOTE_CLIENT_ID`
+- `SECOND_BRAIN_ONENOTE_SCOPES`
+- `SECOND_BRAIN_ONENOTE_TOKEN_CACHE_PATH`
+- `SECOND_BRAIN_ONENOTE_AUTO_OPEN_BROWSER`
+- `SECOND_BRAIN_ONENOTE_TIMEOUT_SECONDS`
+- `SECOND_BRAIN_ONENOTE_USER_AGENT`
+- `SECOND_BRAIN_ONENOTE_MEMORY_SCOPE`
 
-This build supports separate memory scopes in one local stack.
+Use [`.env.example`](/Users/davidmcnabb/projects/second-brain/.env.example) as the reference template.
 
-A practical setup is:
+For OneNote specifically, these settings reference an existing Microsoft Entra
+app registration; they do not provision one. `SECOND_BRAIN_ONENOTE_CLIENT_ID`
+must point to an app that can request the delegated permissions listed in
+`SECOND_BRAIN_ONENOTE_SCOPES`.
 
-- `general` for your reusable notes and reference material
-- `project:second-brain` for this repo's docs, architecture patterns, onboarding notes, and other project files
+## Configuring memories
 
-The file ingester can ingest multiple scoped roots. Example:
+`SECOND_BRAIN_MEMORY_ROOTS` maps memory scopes to local folders using:
+
+```text
+scope|path;scope|path
+```
+
+Example:
 
 ```env
 SECOND_BRAIN_DEFAULT_MEMORY_SCOPE=project:second-brain
-SECOND_BRAIN_MEMORY_ROOTS=project:second-brain|.;general|~/second-brain/general
+SECOND_BRAIN_MEMORY_ROOTS=project:second-brain|.;project:ai-recruitment|/Users/davidmcnabb/projects/ai-recruitment;general|/Users/davidmcnabb/notes
+SECOND_BRAIN_ONENOTE_MEMORY_SCOPE=general
 ```
 
-That lets you ingest the whole supported project folder into `project:second-brain` while keeping personal or shared notes in `general`. Retrieval can stay project-focused by filtering on `memory_scope`.
+That setup means:
 
-## Why PostgreSQL uses both pgvector and tsvector
+- this repo ingests into `project:second-brain`
+- the `ai-recruitment` repo ingests into `project:ai-recruitment`
+- your personal notes folder ingests into `general`
+- OneNote pages also ingest into `general`
 
-PostgreSQL is the retrieval system of record in v1. `chunks.tsv` is a generated stored `tsvector` column built from `chunk_text` and indexed with GIN. That means lexical search is not optional or bolted on later; it is part of the base schema and query path. `chunks.embedding` stores local embeddings in a `vector(256)` column indexed with `ivfflat`.
-
-Retrieval works as:
-
-1. Run lexical retrieval with `websearch_to_tsquery` and `ts_rank_cd`
-2. Run vector retrieval with `pgvector` cosine similarity
-3. Apply memory-scope, metadata, and source filters to both paths
-4. Merge both candidate sets with weighted reciprocal-rank fusion
-5. Return citations and provenance with every hit
-
-## Ingestion workflow
+## Ingestion
 
 ### Local files
 
-- Recursively walk configured folders
-- Extract canonical text from markdown, txt, pdf, and docx
-- Hash file contents to detect changes
-- Preserve source path, timestamps, and extraction metadata
-- Chunk content with heading-aware handling for markdown
-- Write canonical source, chunks, and audit events to PostgreSQL
-- Log failures without stopping the overall ingest run
-- Skip unchanged files using stored metadata and content hashes
-- Support polling-based watch mode for incremental local updates
+Supported file types currently include:
 
-### OneNote
+- `.md`
+- `.txt`
+- `.pdf`
+- `.docx`
+- many code and config text files such as `.py`, `.java`, `.ts`, `.tsx`, `.kt`, `.json`, `.yaml`, `.sql`, `.sh`
 
-OneNote ingestion uses Microsoft Graph delegated authentication only. v1 intentionally does not implement app-only auth.
+Local ingestion:
 
-- Authenticate via OAuth device code flow
-- Read notebooks, sections, and pages from `/me/onenote/...`
-- Preserve notebook, section, and page identifiers in metadata
-- Store raw HTML plus cleaned canonical text
-- Support incremental sync with `lastModifiedDateTime`
-- Retry on Graph throttling responses
+- recursively scans configured memory roots
+- preserves path and timestamps
+- hashes content to detect changes
+- skips unchanged files
+- logs failed extracts without crashing the whole run
+- stores chunked text plus provenance in PostgreSQL
 
-## Running services
+Run a one-off ingest:
 
 ```bash
 make ingest
+```
+
+Run incremental watch mode:
+
+```bash
 make watch
+```
+
+`watch-files` is polling-based, intentionally simple, and designed for local reliability.
+
+### OneNote
+
+OneNote ingestion uses Microsoft Graph delegated authentication only.
+
+This project does not implement app-only auth.
+
+Prerequisite: complete the Microsoft Entra setup above before running this
+command. The `.env` values below only point this repo at that existing app
+registration:
+
+1. Set `SECOND_BRAIN_ONENOTE_CLIENT_ID` to your Entra app's client ID.
+2. Set `SECOND_BRAIN_ONENOTE_TENANT_ID` to `common` or your specific tenant ID.
+3. Keep `SECOND_BRAIN_ONENOTE_SCOPES` aligned with the delegated Graph
+   permissions configured on that app registration.
+
+On first login, the ingester uses device-code authentication and caches the
+delegated refresh token locally so later runs can refresh access tokens without
+prompting again.
+When interactive login is needed, it also opens the Microsoft device login page
+in the default browser unless you disable that behavior in the environment.
+
+Run a sync:
+
+```bash
 make ingest-onenote
-make search query="project notes"
+```
+
+Or with the CLI:
+
+```bash
+.venv/bin/python -m second_brain_ingester.cli ingest-onenote --since 2025-01-01T00:00:00Z
+```
+
+OneNote ingestion preserves notebook, section, and page identifiers, stores raw HTML plus normalized text, and supports incremental sync with modification timestamps where available.
+
+## Searching memory
+
+### Retriever CLI
+
+Search all scopes allowed by your request:
+
+```bash
+.venv/bin/python -m second_brain_retriever.cli "hybrid retrieval"
+```
+
+Search a specific memory:
+
+```bash
+.venv/bin/python -m second_brain_retriever.cli "tenant context cleanup filter" --memory-scope project:ai-recruitment
+```
+
+Search general memory only:
+
+```bash
+.venv/bin/python -m second_brain_retriever.cli "meeting notes architecture decision" --memory-scope general
+```
+
+Search multiple scopes:
+
+```bash
+.venv/bin/python -m second_brain_retriever.cli "vector search" --memory-scope general --memory-scope project:second-brain
+```
+
+### What a good retrieval result looks like
+
+A good hit should include:
+
+- relevant chunk text
+- source title and URI
+- heading path where applicable
+- source metadata
+- citation information
+
+If results are noisy, tighten the query and scope first before changing the architecture.
+
+## MCP usage
+
+Start the MCP server:
+
+```bash
 make mcp
 ```
 
-The CLI equivalents are:
+Or:
 
 ```bash
-python3 -m second_brain_ingester.cli ingest-files
-python3 -m second_brain_ingester.cli watch-files --interval 2.0
-python3 -m second_brain_ingester.cli ingest-onenote --since 2025-01-01T00:00:00Z
-python3 -m second_brain_retriever.cli "hybrid retrieval"
-python3 -m second_brain_mcp_server.cli
+.venv/bin/python -m second_brain_mcp_server.cli
 ```
 
-`watch-files` uses a boring polling loop. It is designed for local reliability and incremental updates: unchanged supported files are skipped, changed files are reindexed, and new files are ingested.
+The MCP server is stdio-first and works well with Claude and Codex.
 
-`list_sources` is intentionally lightweight: it returns source summaries for navigation, not full raw document bodies. Use `get_source` when you want the full stored source record.
+Available tools:
 
-## Quality checks
+- `search_memory`
+- `get_source`
+- `get_chunk_context`
+- `list_sources`
+
+`list_sources` returns compact source summaries for efficiency. Use `get_source` when you need the full stored record.
+
+## Recommended usage with agents
+
+For project work:
+
+- ingest the whole project repo into a dedicated project scope
+- keep architecture docs, ADRs, notes, and useful code/config files in that scope
+- point Claude or Codex at the MCP server with that scope as the default
+
+For personal memory:
+
+- ingest OneNote and local notes into `general`
+- query `general` explicitly when you want cross-project recall
+
+Agent workflow recommendation:
+
+1. use `list_sources` to see what memory is available
+2. use `search_memory` early for architecture, terminology, prior decisions, and docs
+3. use `get_chunk_context` if a chunk looks useful but needs surrounding context
+4. use `get_source` when you need the full underlying source record
+5. prefer the live codebase over memory if they conflict
+
+## Commands
+
+Common commands:
 
 ```bash
+make bootstrap
+make up
+make down
+make ingest
+make watch
+make ingest-onenote
+make search query="tenant context"
+make mcp
 make format
 make lint
 make test
 ```
 
-## Environment variables
+## Testing and validation
 
-- `SECOND_BRAIN_DB_PORT`: host port mapped to the container's PostgreSQL `5432`
-- `SECOND_BRAIN_DB_DSN`: PostgreSQL DSN for all apps
-- `SECOND_BRAIN_EMBEDDING_DIMENSION`: vector size, default `256`
-- `SECOND_BRAIN_DEFAULT_MEMORY_SCOPE`: default scope used for scoped ingest fallback and MCP retrieval
-- `SECOND_BRAIN_MEMORY_ROOTS`: semicolon-separated `scope|path` entries for scoped local ingest
-- `SECOND_BRAIN_FILE_ROOTS`: comma-separated directories for local ingest
-- `SECOND_BRAIN_MCP_SERVER_NAME`: stdio MCP server name
-- `SECOND_BRAIN_ONENOTE_TENANT_ID`: Entra tenant, use `common` for multi-tenant delegated login
-- `SECOND_BRAIN_ONENOTE_CLIENT_ID`: public client app id for delegated Graph auth
-- `SECOND_BRAIN_ONENOTE_SCOPES`: delegated Graph scopes
-- `SECOND_BRAIN_ONENOTE_REDIRECT_URI`: redirect URI registered for the public client
-- `SECOND_BRAIN_ONENOTE_TIMEOUT_SECONDS`: auth and API timeout
-- `SECOND_BRAIN_ONENOTE_USER_AGENT`: Graph client user agent
-- `SECOND_BRAIN_ONENOTE_MEMORY_SCOPE`: scope to assign to ingested OneNote content
+Run checks:
 
-Use [`.env.example`](/Users/davidmcnabb/projects/second-brain/.env.example) as the template for your real local `.env`, and keep that real `.env` out of version control.
+```bash
+make lint
+make test
+```
 
-## Notes
+Useful validation steps:
 
-- The default embedder is intentionally local and deterministic so v1 can work without cloud dependencies. It is a quality baseline, not the final ranking ceiling.
-- The MCP server is stdio-first and designed so a later HTTP transport can wrap the same service layer without changing retrieval logic.
-- Update [docs/architecture.md](/Users/davidmcnabb/projects/second-brain/second-brain-starter/docs/architecture.md) if architectural decisions change.
+- verify PostgreSQL is up on `55432`
+- run `make ingest`
+- run targeted searches with `--memory-scope`
+- inspect source counts in Postgres for each memory scope
+- test MCP retrieval from Claude or Codex
+
+## Current limitations
+
+- the default embedder is local and deterministic, which is good for offline repeatability but not the strongest retrieval quality ceiling
+- OneNote auth uses delegated device-code flow with local refresh-token caching
+- watch mode handles new and changed files, but source tombstoning for deleted files is not implemented yet
+- malformed source files are handled gracefully, but scanned PDFs without usable text remain a weak path because OCR is intentionally out of scope for v1
+- ChatGPT Desktop currently needs a remote MCP transport; this repo is stdio-first today
+
+## Related docs
+
+- [architecture.md](/Users/davidmcnabb/projects/second-brain/docs/architecture.md)
+- [roadmap.md](/Users/davidmcnabb/projects/second-brain/docs/roadmap.md)
+
+If architecture decisions change, update the docs alongside the code.

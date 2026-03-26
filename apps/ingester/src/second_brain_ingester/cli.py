@@ -182,7 +182,8 @@ def ingest_onenote(settings: Settings, since: str | None) -> None:
         tenant_id=settings.onenote_tenant_id,
         client_id=settings.onenote_client_id,
         scopes=settings.onenote_scopes,
-        redirect_uri=settings.onenote_redirect_uri,
+        token_cache_path=settings.onenote_token_cache_path,
+        auto_open_browser=settings.onenote_auto_open_browser,
         timeout_seconds=settings.onenote_timeout_seconds,
     )
     graph = GraphClient(

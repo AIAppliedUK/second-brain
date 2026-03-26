@@ -4,7 +4,7 @@ import json
 import time
 from dataclasses import dataclass
 from typing import Protocol
-from urllib import request
+from urllib import parse, request
 from urllib.error import HTTPError
 
 
@@ -38,7 +38,7 @@ class RetryTransport:
                 return self.base_transport.request_json(url, headers)
             except HTTPError as exc:
                 if exc.code != 429 or attempt == self.retries:
-                    raise
+                    raise _graph_http_error(exc, url) from exc
                 retry_after = exc.headers.get("Retry-After")
                 time.sleep(float(retry_after) if retry_after else self.backoff_seconds * attempt)
         raise RuntimeError("Unreachable retry state")
@@ -49,7 +49,7 @@ class RetryTransport:
                 return self.base_transport.request_text(url, headers)
             except HTTPError as exc:
                 if exc.code != 429 or attempt == self.retries:
-                    raise
+                    raise _graph_http_error(exc, url) from exc
                 retry_after = exc.headers.get("Retry-After")
                 time.sleep(float(retry_after) if retry_after else self.backoff_seconds * attempt)
         raise RuntimeError("Unreachable retry state")
@@ -61,10 +61,14 @@ class GraphClient:
     transport: GraphTransport
     user_agent: str
 
-    def list_pages(self, since: str | None = None) -> list[dict]:
-        url = "https://graph.microsoft.com/v1.0/me/onenote/pages?$top=100"
+    def list_pages_for_section(self, section_id: str, since: str | None = None) -> list[dict]:
+        params = {"$top": "100"}
         if since:
-            url += f"&$filter=lastModifiedDateTime ge {since}"
+            params["$filter"] = f"lastModifiedDateTime ge {since}"
+        url = (
+            f"https://graph.microsoft.com/v1.0/me/onenote/sections/{section_id}/pages?"
+            + parse.urlencode(params)
+        )
         return self._paginate(url)
 
     def list_sections(self) -> list[dict]:
@@ -94,3 +98,11 @@ class GraphClient:
         if include_json:
             headers["Accept"] = "application/json"
         return headers
+
+
+def _graph_http_error(exc: HTTPError, url: str) -> RuntimeError:
+    body = exc.read().decode("utf-8", errors="replace").strip()
+    message = f"Graph request failed with HTTP {exc.code} for {url}"
+    if body:
+        message += f": {body}"
+    return RuntimeError(message)
