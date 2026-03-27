@@ -18,5 +18,44 @@ services:
       timeout: 5s
       retries: 20
 
+  mcp-server:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: second-brain-mcp-server
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      SECOND_BRAIN_DB_DSN: postgresql://second_brain:second_brain@postgres:5432/second_brain
+      SECOND_BRAIN_MCP_TRANSPORT: streamable-http
+      SECOND_BRAIN_MCP_HOST: 0.0.0.0
+      SECOND_BRAIN_MCP_PORT: 8000
+      SECOND_BRAIN_MCP_STREAMABLE_HTTP_PATH: /mcp
+    ports:
+      - "${SECOND_BRAIN_MCP_BIND_PORT:-18000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  https-proxy:
+    image: caddy:2
+    container_name: second-brain-https-proxy
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      mcp-server:
+        condition: service_started
+
 volumes:
   postgres-data:
+  caddy-data:
+  caddy-config:

@@ -4,7 +4,7 @@ VENV_PIP = .venv/bin/pip
 PYTHONPATHS=apps/ingester/src:apps/retriever/src:apps/mcp-server/src:libs/core/src:libs/models/src:libs/file-ingest/src:libs/one-note/src
 export PYTHONPATH=$(PYTHONPATHS)
 
-.PHONY: bootstrap up down test lint format ingest watch ingest-onenote search mcp
+.PHONY: bootstrap up up-https down test lint format ingest watch ingest-onenote search mcp
 
 bootstrap:
 	$(PYTHON) -m venv .venv
@@ -12,7 +12,10 @@ bootstrap:
 	$(VENV_PIP) install -e ".[dev]"
 
 up:
-	docker compose -f infra/docker-compose.yml up -d
+	docker compose -f infra/docker-compose.yml up -d postgres mcp-server
+
+up-https:
+	docker compose -f infra/docker-compose.yml up -d postgres mcp-server https-proxy
 
 down:
 	docker compose -f infra/docker-compose.yml down

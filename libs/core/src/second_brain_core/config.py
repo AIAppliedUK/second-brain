@@ -89,6 +89,17 @@ class Settings:
     mcp_server_name: str = field(
         default_factory=lambda: os.getenv("SECOND_BRAIN_MCP_SERVER_NAME", "second-brain")
     )
+    mcp_transport: str = field(
+        default_factory=lambda: os.getenv("SECOND_BRAIN_MCP_TRANSPORT", "stdio")
+    )
+    mcp_host: str = field(default_factory=lambda: os.getenv("SECOND_BRAIN_MCP_HOST", "127.0.0.1"))
+    mcp_port: int = field(default_factory=lambda: int(os.getenv("SECOND_BRAIN_MCP_PORT", "8000")))
+    mcp_streamable_http_path: str = field(
+        default_factory=lambda: os.getenv("SECOND_BRAIN_MCP_STREAMABLE_HTTP_PATH", "/mcp")
+    )
+    mcp_sse_mount_path: str = field(
+        default_factory=lambda: os.getenv("SECOND_BRAIN_MCP_SSE_MOUNT_PATH", "/")
+    )
     onenote_tenant_id: str = field(
         default_factory=lambda: os.getenv("SECOND_BRAIN_ONENOTE_TENANT_ID", "common")
     )

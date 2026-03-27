@@ -10,7 +10,13 @@ from second_brain_models import (
 from .service import MCPService
 
 
-def build_mcp_server(service: MCPService, server_name: str):
+def build_mcp_server(
+    service: MCPService,
+    server_name: str,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    streamable_http_path: str = "/mcp",
+):
     try:
         from mcp.server.fastmcp import FastMCP
     except ImportError as exc:
@@ -19,7 +25,12 @@ def build_mcp_server(service: MCPService, server_name: str):
             "Install project dependencies before starting the stdio server."
         ) from exc
 
-    server = FastMCP(server_name)
+    server = FastMCP(
+        server_name,
+        host=host,
+        port=port,
+        streamable_http_path=streamable_http_path,
+    )
 
     @server.tool()
     def search_memory(

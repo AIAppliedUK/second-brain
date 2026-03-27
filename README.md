@@ -319,7 +319,7 @@ If results are noisy, tighten the query and scope first before changing the arch
 
 ## MCP usage
 
-Start the MCP server:
+Start the MCP server locally over stdio:
 
 ```bash
 make mcp
@@ -331,7 +331,54 @@ Or:
 .venv/bin/python -m second_brain_mcp_server.cli
 ```
 
-The MCP server is stdio-first and works well with Claude and Codex.
+Start the MCP server as a local HTTP service:
+
+```bash
+.venv/bin/python -m second_brain_mcp_server.cli --transport streamable-http --host 127.0.0.1 --port 8000
+```
+
+Start the always-on Dockerized MCP service:
+
+```bash
+make up
+```
+
+Start the HTTPS-published stack for remote clients such as Manus:
+
+```bash
+make up-https
+```
+
+This compose stack now runs:
+
+- PostgreSQL in Docker on `127.0.0.1:55432`
+- an MCP server in Docker on `http://127.0.0.1:18000/mcp`
+
+If you want a different host port for the MCP container, set `SECOND_BRAIN_MCP_BIND_PORT` in [`.env`](/Users/davidmcnabb/projects/second-brain/.env).
+
+The MCP server still supports stdio for local agent clients, but it can now also run as a remote `streamable-http` service for tools that prefer a persistent endpoint.
+
+### Public HTTPS for Manus
+
+Manus requires your MCP server to be reachable over public HTTPS.
+
+To publish this stack over HTTPS:
+
+1. set `SECOND_BRAIN_PUBLIC_HOSTNAME` in [`.env`](/Users/davidmcnabb/projects/second-brain/.env) to a real DNS name such as `mcp.example.com`
+2. set `SECOND_BRAIN_ACME_EMAIL` to an email address for certificate issuance
+3. point that DNS name at the machine running Docker
+4. ensure inbound ports `80` and `443` reach that machine
+5. run:
+
+```bash
+make up-https
+```
+
+The HTTPS URL Manus, Claude, and Codex should use in that setup is:
+
+```text
+https://YOUR_HOSTNAME/mcp
+```
 
 Available tools:
 
@@ -393,6 +440,7 @@ make test
 Useful validation steps:
 
 - verify PostgreSQL is up on `55432`
+- verify the MCP endpoint responds on `18000`
 - run `make ingest`
 - run targeted searches with `--memory-scope`
 - inspect source counts in Postgres for each memory scope
@@ -404,7 +452,7 @@ Useful validation steps:
 - OneNote auth uses delegated device-code flow with local refresh-token caching
 - watch mode handles new and changed files, but source tombstoning for deleted files is not implemented yet
 - malformed source files are handled gracefully, but scanned PDFs without usable text remain a weak path because OCR is intentionally out of scope for v1
-- ChatGPT Desktop currently needs a remote MCP transport; this repo is stdio-first today
+- some clients still differ in remote MCP transport support, so confirm whether they expect `streamable-http`, SSE, or stdio before wiring them
 
 ## Related docs
 
