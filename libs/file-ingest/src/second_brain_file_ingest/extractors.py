@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import openpyxl
+import xlrd
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError, PdfStreamError
 
@@ -85,7 +86,28 @@ class FileExtractor:
         return "".join(fragments).replace("&amp;", "&").strip()
 
     def _extract_xls(self, path: Path) -> str:
-        raise FileExtractionError(f"XLS extraction not yet implemented: {path}")
+        wb = xlrd.open_workbook(str(path))
+        sections: list[str] = []
+        for sheet_index in range(wb.nsheets):
+            ws = wb.sheet_by_index(sheet_index)
+            if ws.nrows == 0:
+                continue
+            rows: list[str] = []
+            for row_index in range(ws.nrows):
+                cells: list[str] = []
+                for col_index in range(ws.ncols):
+                    cell = ws.cell(row_index, col_index)
+                    if cell.ctype == xlrd.XL_CELL_NUMBER:
+                        value = cell.value
+                        cells.append(str(int(value)) if value == int(value) else str(value))
+                    else:
+                        cells.append(str(cell.value))
+                rows.append(" | ".join(cells))
+            if not rows:
+                continue
+            lines: list[str] = [f"## Sheet: {ws.name}"] + rows
+            sections.append("\n".join(lines))
+        return "\n\n".join(sections)
 
     def _extract_archimate(self, path: Path) -> str:
         raise FileExtractionError(f"ArchiMate extraction not yet implemented: {path}")

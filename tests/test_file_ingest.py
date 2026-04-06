@@ -144,6 +144,17 @@ def test_file_extractor_skips_empty_xlsx_sheets(tmp_path: Path):
     assert "## Sheet: HasData" in result.text
 
 
+def test_file_extractor_extracts_xls():
+    path = Path(__file__).parent / "fixtures" / "sample.xls"
+    extractor = FileExtractor()
+    result = extractor.extract(path)
+    assert "## Sheet: Revenue" in result.text
+    assert "Quarter | Revenue" in result.text
+    assert "Q1 2025" in result.text
+    assert "## Sheet: Expenses" in result.text
+    assert "Infra" in result.text
+
+
 def test_discover_files_excludes_code_but_includes_documents(tmp_path: Path):
     py_file = tmp_path / "main.py"
     ts_file = tmp_path / "app.ts"
