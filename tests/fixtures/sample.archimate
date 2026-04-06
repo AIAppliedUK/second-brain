@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<archimate:model xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                 xmlns:archimate="http://www.archimatetool.com/archimate"
+                 name="Sample Model">
+  <folder name="Business" type="business">
+    <element xsi:type="archimate:BusinessProcess" name="Order Fulfillment" id="bp-1">
+      <documentation>Handles the end-to-end order lifecycle from receipt to delivery.</documentation>
+    </element>
+    <element xsi:type="archimate:BusinessActor" name="Customer" id="ba-1"/>
+  </folder>
+  <folder name="Application" type="application">
+    <element xsi:type="archimate:ApplicationComponent" name="Payment Gateway" id="ac-1">
+      <documentation>Processes credit card transactions and returns authorization codes.</documentation>
+    </element>
+    <element xsi:type="archimate:ApplicationService" name="Payment API" id="as-1"/>
+  </folder>
+  <folder name="Technology &amp; Physical" type="technology">
+    <element xsi:type="archimate:Node" name="Web Server" id="tn-1"/>
+  </folder>
+  <folder name="Relations" type="relations">
+    <element xsi:type="archimate:ServingRelationship" source="bp-1" target="ba-1" id="rel-1"/>
+    <element xsi:type="archimate:FlowRelationship" source="ac-1" target="bp-1" id="rel-2" name="payment result"/>
+  </folder>
+</archimate:model>

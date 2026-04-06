@@ -155,6 +155,37 @@ def test_file_extractor_extracts_xls():
     assert "Infra" in result.text
 
 
+def test_file_extractor_extracts_archimate():
+    path = Path(__file__).parent / "fixtures" / "sample.archimate"
+    extractor = FileExtractor()
+    result = extractor.extract(path)
+    assert "## Business Layer" in result.text
+    assert "## Application Layer" in result.text
+    assert "## Technology Layer" in result.text
+    assert 'Business Process: "Order Fulfillment"' in result.text
+    assert "Handles the end-to-end order lifecycle" in result.text
+    assert 'Business Actor: "Customer"' in result.text
+    assert 'Application Component: "Payment Gateway"' in result.text
+    assert "## Relationships" in result.text
+    assert "Order Fulfillment" in result.text
+    assert "Customer" in result.text
+
+
+def test_file_extractor_extracts_archimate_without_documentation(tmp_path: Path):
+    path = tmp_path / "minimal.archimate"
+    path.write_text("""<?xml version="1.0" encoding="UTF-8"?>
+<archimate:model xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                 xmlns:archimate="http://www.archimatetool.com/archimate"
+                 name="Minimal">
+  <folder name="Business" type="business">
+    <element xsi:type="archimate:BusinessProcess" name="Checkout" id="bp-1"/>
+  </folder>
+</archimate:model>""")
+    extractor = FileExtractor()
+    result = extractor.extract(path)
+    assert 'Business Process: "Checkout"' in result.text
+
+
 def test_discover_files_excludes_code_but_includes_documents(tmp_path: Path):
     py_file = tmp_path / "main.py"
     ts_file = tmp_path / "app.ts"

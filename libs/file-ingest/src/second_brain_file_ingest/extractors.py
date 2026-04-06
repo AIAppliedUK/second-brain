@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import re
+import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -110,7 +112,116 @@ class FileExtractor:
         return "\n\n".join(sections)
 
     def _extract_archimate(self, path: Path) -> str:
-        raise FileExtractionError(f"ArchiMate extraction not yet implemented: {path}")
+        _XSI = "http://www.w3.org/2001/XMLSchema-instance"
+
+        _LAYER_TYPES: dict[str, str] = {}
+        for t in [
+            "BusinessActor", "BusinessRole", "BusinessCollaboration", "BusinessInterface",
+            "BusinessProcess", "BusinessFunction", "BusinessInteraction", "BusinessEvent",
+            "BusinessService", "BusinessObject", "Contract", "Representation", "Product",
+        ]:
+            _LAYER_TYPES[t] = "Business"
+        for t in [
+            "ApplicationComponent", "ApplicationCollaboration", "ApplicationInterface",
+            "ApplicationFunction", "ApplicationInteraction", "ApplicationProcess",
+            "ApplicationEvent", "ApplicationService", "DataObject",
+        ]:
+            _LAYER_TYPES[t] = "Application"
+        for t in [
+            "Node", "Device", "SystemSoftware", "TechnologyCollaboration",
+            "TechnologyInterface", "Path", "CommunicationNetwork", "TechnologyFunction",
+            "TechnologyProcess", "TechnologyInteraction", "TechnologyEvent",
+            "TechnologyService", "Artifact",
+        ]:
+            _LAYER_TYPES[t] = "Technology"
+        for t in ["Resource", "Capability", "CourseOfAction", "ValueStream"]:
+            _LAYER_TYPES[t] = "Strategy"
+        for t in [
+            "Stakeholder", "Driver", "Assessment", "Goal", "Outcome", "Principle",
+            "Requirement", "Constraint", "Meaning", "Value",
+        ]:
+            _LAYER_TYPES[t] = "Motivation"
+        for t in ["WorkPackage", "Deliverable", "ImplementationEvent", "Plateau", "Gap"]:
+            _LAYER_TYPES[t] = "Implementation"
+
+        _LAYER_ORDER = ["Business", "Application", "Technology", "Strategy", "Motivation", "Implementation", "Other"]
+
+        tree = ET.parse(path)
+        root = tree.getroot()
+
+        # Collect all elements recursively
+        id_to_name: dict[str, str] = {}
+        elements: list[dict] = []
+        relationships: list[dict] = []
+
+        for elem in root.iter():
+            xsi_type = elem.get(f"{{{_XSI}}}type")
+            if xsi_type is None:
+                continue
+            # Strip namespace prefix (e.g. "archimate:BusinessProcess" -> "BusinessProcess")
+            if ":" in xsi_type:
+                type_name = xsi_type.split(":", 1)[1]
+            else:
+                type_name = xsi_type
+
+            elem_id = elem.get("id")
+            elem_name = elem.get("name", "")
+
+            if elem_id and elem_name:
+                id_to_name[elem_id] = elem_name
+
+            if type_name.endswith("Relationship"):
+                relationships.append({
+                    "type": type_name,
+                    "name": elem_name,
+                    "source": elem.get("source", ""),
+                    "target": elem.get("target", ""),
+                })
+            else:
+                doc_elem = elem.find("documentation")
+                doc_text = doc_elem.text.strip() if doc_elem is not None and doc_elem.text else ""
+                elements.append({
+                    "type": type_name,
+                    "name": elem_name,
+                    "doc": doc_text,
+                    "layer": _LAYER_TYPES.get(type_name, "Other"),
+                })
+
+        def format_type(type_name: str) -> str:
+            return re.sub(r"(?<=[a-z])(?=[A-Z])", " ", type_name)
+
+        # Group elements by layer
+        layers: dict[str, list[dict]] = {layer: [] for layer in _LAYER_ORDER}
+        for elem in elements:
+            layers[elem["layer"]].append(elem)
+
+        sections: list[str] = []
+
+        for layer in _LAYER_ORDER:
+            layer_elements = layers[layer]
+            if not layer_elements:
+                continue
+            lines: list[str] = [f"## {layer} Layer", ""]
+            for elem in layer_elements:
+                lines.append(f'{format_type(elem["type"])}: "{elem["name"]}"')
+                if elem["doc"]:
+                    lines.append(elem["doc"])
+                lines.append("")
+            # Remove trailing blank line
+            while lines and lines[-1] == "":
+                lines.pop()
+            sections.append("\n".join(lines))
+
+        if relationships:
+            rel_lines: list[str] = ["## Relationships", ""]
+            for rel in relationships:
+                src_name = id_to_name.get(rel["source"], rel["source"])
+                tgt_name = id_to_name.get(rel["target"], rel["target"])
+                label = rel["name"] if rel["name"] else rel["type"]
+                rel_lines.append(f'"{src_name}" -> "{tgt_name}" ({label})')
+            sections.append("\n".join(rel_lines))
+
+        return "\n\n".join(sections)
 
     def _extract_xlsx(self, path: Path) -> str:
         wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
