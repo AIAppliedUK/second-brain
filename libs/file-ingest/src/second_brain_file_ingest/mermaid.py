@@ -9,7 +9,7 @@ def _parse_flowchart(content: str) -> str | None:
     edges: list[tuple[str, str]] = []
 
     # Extract node labels: A[Label], A(Label), A{Label}
-    node_pattern = re.compile(r'\b(\w+)\s*[\[\({]\s*([^\]\)\}]+?)\s*[\]\)\}]')
+    node_pattern = re.compile(r"\b(\w+)\s*[\[\({]\s*([^\]\)\}]+?)\s*[\]\)\}]")
     for match in node_pattern.finditer(content):
         node_id, label = match.group(1), match.group(2)
         node_labels[node_id] = label
@@ -18,9 +18,9 @@ def _parse_flowchart(content: str) -> str | None:
     # Also handle node definitions inline: A[Label] --> B[Label]
     # Also handle edge labels: A -->|text| B
     edge_pattern = re.compile(
-        r'\b(\w+)\s*(?:[\[\({][^\]\)\}]*[\]\)\}])?\s*'
-        r'(?:-->|---|-.->|==>)'
-        r'(?:\|[^|]*\|)?\s*(\w+)'
+        r"\b(\w+)\s*(?:[\[\({][^\]\)\}]*[\]\)\}])?\s*"
+        r"(?:-->|---|-.->|==>)"
+        r"(?:\|[^|]*\|)?\s*(\w+)"
     )
     for match in edge_pattern.finditer(content):
         src, dst = match.group(1), match.group(2)
@@ -43,8 +43,8 @@ def _parse_sequence(content: str) -> str | None:
     sentences = []
 
     # Match: Source->>Target: message  (send)  or  Source-->>Target: reply
-    send_pattern = re.compile(r'^\s*(\w+)->>(\w+)\s*:\s*(.+)$', re.MULTILINE)
-    reply_pattern = re.compile(r'^\s*(\w+)-->>(\w+)\s*:\s*(.+)$', re.MULTILINE)
+    send_pattern = re.compile(r"^\s*(\w+)->>(\w+)\s*:\s*(.+)$", re.MULTILINE)
+    reply_pattern = re.compile(r"^\s*(\w+)-->>(\w+)\s*:\s*(.+)$", re.MULTILINE)
 
     # Collect all matches with their positions so we can sort by position
     matches: list[tuple[int, str]] = []
@@ -69,11 +69,11 @@ def _parse_sequence(content: str) -> str | None:
 def _summarize_mermaid(block_content: str) -> str | None:
     """Given the raw mermaid diagram content, return a natural-language summary or None."""
     stripped = block_content.strip()
-    first_line = stripped.split('\n')[0].strip().lower()
+    first_line = stripped.split("\n")[0].strip().lower()
 
-    if first_line.startswith('graph') or first_line.startswith('flowchart'):
+    if first_line.startswith("graph") or first_line.startswith("flowchart"):
         return _parse_flowchart(stripped)
-    elif first_line == 'sequencediagram':
+    elif first_line == "sequencediagram":
         return _parse_sequence(stripped)
 
     return None
@@ -86,7 +86,7 @@ def enrich_mermaid_blocks(text: str) -> str:
     '\\n\\nDiagram: {summary}' after the closing fence. Unrecognized types are
     left unchanged.
     """
-    pattern = re.compile(r'(```mermaid\s*\n(.*?)```)', re.DOTALL)
+    pattern = re.compile(r"(```mermaid\s*\n(.*?)```)", re.DOTALL)
 
     def replace_block(match: re.Match) -> str:
         full_block = match.group(1)

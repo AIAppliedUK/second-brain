@@ -1,8 +1,11 @@
 from pathlib import Path
 
+import openpyxl
+
 from second_brain_core.config import MemoryRoot
 from second_brain_core.embeddings import DeterministicEmbedder
 from second_brain_file_ingest import FileExtractionError, FileExtractor, LocalFileIngester
+from second_brain_file_ingest.mermaid import enrich_mermaid_blocks
 
 
 def test_local_file_ingester_builds_canonical_document_for_markdown(tmp_path: Path):
@@ -11,9 +14,7 @@ def test_local_file_ingester_builds_canonical_document_for_markdown(tmp_path: Pa
         "# Heading\n\nThis is a note about retrieval.\n\n## Details\n\nCitations matter."
     )
     ingester = LocalFileIngester(FileExtractor(), DeterministicEmbedder(32))
-    document, event = ingester.ingest_path(
-        path, memory_scope="project:test", root_path=tmp_path
-    )
+    document, event = ingester.ingest_path(path, memory_scope="project:test", root_path=tmp_path)
     assert document is not None
     assert document.source.memory_scope == "project:test"
     assert document.source.source_type == "local_file"
@@ -81,7 +82,7 @@ def test_discover_files_skips_generated_dirs_and_volume_state(tmp_path: Path):
 
 def test_file_extractor_rejects_unsupported_code_files(tmp_path: Path):
     path = tmp_path / "Example.kt"
-    path.write_text("class Example {\n    fun greet() = \"hello\"\n}\n")
+    path.write_text('class Example {\n    fun greet() = "hello"\n}\n')
     extractor = FileExtractor()
     try:
         extractor.extract(path)
@@ -101,9 +102,6 @@ def test_file_extractor_raises_file_extraction_error_for_invalid_pdf(tmp_path: P
         assert "Failed to extract PDF" in str(exc)
     else:
         raise AssertionError("Expected invalid PDF extraction to fail")
-
-
-import openpyxl
 
 
 def test_file_extractor_extracts_xlsx_with_multiple_sheets(tmp_path: Path):
@@ -186,9 +184,6 @@ def test_file_extractor_extracts_archimate_without_documentation(tmp_path: Path)
     assert 'Business Process: "Checkout"' in result.text
 
 
-from second_brain_file_ingest.mermaid import enrich_mermaid_blocks
-
-
 def test_mermaid_enriches_flowchart():
     text = """Some intro text.
 
@@ -249,9 +244,7 @@ graph LR
 The client talks to the server.
 """)
     ingester = LocalFileIngester(FileExtractor(), DeterministicEmbedder(32))
-    document, event = ingester.ingest_path(
-        path, memory_scope="project:test", root_path=tmp_path
-    )
+    document, event = ingester.ingest_path(path, memory_scope="project:test", root_path=tmp_path)
     assert document is not None
     full_text = " ".join(c.chunk_text for c in document.chunks)
     assert "Client connects to Server" in full_text
