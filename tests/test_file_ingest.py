@@ -186,6 +186,78 @@ def test_file_extractor_extracts_archimate_without_documentation(tmp_path: Path)
     assert 'Business Process: "Checkout"' in result.text
 
 
+from second_brain_file_ingest.mermaid import enrich_mermaid_blocks
+
+
+def test_mermaid_enriches_flowchart():
+    text = """Some intro text.
+
+```mermaid
+graph LR
+    A[User Request] --> B[API Gateway]
+    B --> C[Auth Service]
+    B --> D[Data Service]
+```
+
+More text after."""
+    result = enrich_mermaid_blocks(text)
+    assert "User Request connects to API Gateway" in result
+    assert "API Gateway connects to Auth Service" in result
+    assert "API Gateway connects to Data Service" in result
+    assert "Some intro text." in result
+    assert "More text after." in result
+
+
+def test_mermaid_enriches_sequence_diagram():
+    text = """```mermaid
+sequenceDiagram
+    Client->>API: POST /login
+    API->>Auth: validate credentials
+    Auth-->>API: token
+    API-->>Client: 200 OK
+```"""
+    result = enrich_mermaid_blocks(text)
+    assert "Client sends POST /login to API" in result
+    assert "Auth replies token to API" in result
+
+
+def test_mermaid_leaves_unrecognized_types_unchanged():
+    text = """```mermaid
+pie title Pets
+    "Dogs" : 386
+    "Cats" : 85
+```"""
+    result = enrich_mermaid_blocks(text)
+    assert "pie title Pets" in result
+
+
+def test_mermaid_handles_markdown_without_mermaid():
+    text = "# Just a heading\n\nSome paragraph."
+    result = enrich_mermaid_blocks(text)
+    assert result == text
+
+
+def test_local_file_ingester_enriches_mermaid_in_markdown(tmp_path: Path):
+    path = tmp_path / "arch.md"
+    path.write_text("""# Architecture
+
+```mermaid
+graph LR
+    A[Client] --> B[Server]
+```
+
+The client talks to the server.
+""")
+    ingester = LocalFileIngester(FileExtractor(), DeterministicEmbedder(32))
+    document, event = ingester.ingest_path(
+        path, memory_scope="project:test", root_path=tmp_path
+    )
+    assert document is not None
+    full_text = " ".join(c.chunk_text for c in document.chunks)
+    assert "Client connects to Server" in full_text
+    assert event.status == "success"
+
+
 def test_discover_files_excludes_code_but_includes_documents(tmp_path: Path):
     py_file = tmp_path / "main.py"
     ts_file = tmp_path / "app.ts"

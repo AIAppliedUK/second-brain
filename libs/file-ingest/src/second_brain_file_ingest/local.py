@@ -10,9 +10,11 @@ from second_brain_core.embeddings import DeterministicEmbedder
 from second_brain_models import AuditEvent, CanonicalDocument, ChunkUpsert, SourceUpsert
 
 from .extractors import ExtractedContent, FileExtractionError, FileExtractor
+from .mermaid import enrich_mermaid_blocks
 
 
 def _parse_markdown_sections(text: str) -> list[tuple[list[str], str]]:
+    text = enrich_mermaid_blocks(text)
     sections: list[tuple[list[str], str]] = []
     headings: list[str] = []
     buffer: list[str] = []
@@ -40,15 +42,30 @@ def _default_sections(text: str) -> list[tuple[list[str], str]]:
 
 class LocalFileIngester:
     ignored_directory_names = {
+        ".build",
         ".git",
         ".venv",
+        ".next",
+        ".pnpm-store",
         "__pycache__",
+        ".cache",
+        ".gradle",
+        ".idea",
         ".pytest_cache",
         ".ruff_cache",
+        ".turbo",
+        "build",
+        "coverage",
         "node_modules",
+        "out",
         ".mypy_cache",
     }
     ignored_path_markers = {
+        ".cache",
+        ".next",
+        ".turbo",
+        "build",
+        "coverage",
         "target",
         "dist",
         "test-results",
