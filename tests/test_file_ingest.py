@@ -79,17 +79,16 @@ def test_discover_files_skips_generated_dirs_and_volume_state(tmp_path: Path):
     assert discovered == [(MemoryRoot(scope="project:test", path=tmp_path), kept_result)]
 
 
-def test_local_file_ingester_supports_code_files_as_plain_text(tmp_path: Path):
+def test_file_extractor_rejects_unsupported_code_files(tmp_path: Path):
     path = tmp_path / "Example.kt"
     path.write_text("class Example {\n    fun greet() = \"hello\"\n}\n")
-    ingester = LocalFileIngester(FileExtractor(), DeterministicEmbedder(32))
-    document, event = ingester.ingest_path(
-        path, memory_scope="project:kmp", root_path=tmp_path
-    )
-    assert document is not None
-    assert document.source.memory_scope == "project:kmp"
-    assert "greet" in document.chunks[0].chunk_text
-    assert event.status == "success"
+    extractor = FileExtractor()
+    try:
+        extractor.extract(path)
+    except FileExtractionError as exc:
+        assert "Unsupported file type" in str(exc)
+    else:
+        raise AssertionError("Expected code file extraction to be rejected")
 
 
 def test_file_extractor_raises_file_extraction_error_for_invalid_pdf(tmp_path: Path):
@@ -102,3 +101,65 @@ def test_file_extractor_raises_file_extraction_error_for_invalid_pdf(tmp_path: P
         assert "Failed to extract PDF" in str(exc)
     else:
         raise AssertionError("Expected invalid PDF extraction to fail")
+
+
+import openpyxl
+
+
+def test_file_extractor_extracts_xlsx_with_multiple_sheets(tmp_path: Path):
+    path = tmp_path / "data.xlsx"
+    wb = openpyxl.Workbook()
+    ws1 = wb.active
+    ws1.title = "Revenue"
+    ws1.append(["Quarter", "Revenue", "Growth"])
+    ws1.append(["Q1 2025", 1200000, "15%"])
+    ws1.append(["Q2 2025", 1380000, "15%"])
+    ws2 = wb.create_sheet("Expenses")
+    ws2.append(["Category", "Amount"])
+    ws2.append(["Infra", 50000])
+    wb.save(path)
+
+    extractor = FileExtractor()
+    result = extractor.extract(path)
+    assert "## Sheet: Revenue" in result.text
+    assert "Quarter | Revenue | Growth" in result.text
+    assert "Q1 2025 | 1200000 | 15%" in result.text
+    assert "## Sheet: Expenses" in result.text
+    assert "Infra | 50000" in result.text
+
+
+def test_file_extractor_skips_empty_xlsx_sheets(tmp_path: Path):
+    path = tmp_path / "sparse.xlsx"
+    wb = openpyxl.Workbook()
+    ws1 = wb.active
+    ws1.title = "Empty"
+    ws2 = wb.create_sheet("HasData")
+    ws2.append(["Name", "Value"])
+    ws2.append(["Alpha", 1])
+    wb.save(path)
+
+    extractor = FileExtractor()
+    result = extractor.extract(path)
+    assert "Empty" not in result.text
+    assert "## Sheet: HasData" in result.text
+
+
+def test_discover_files_excludes_code_but_includes_documents(tmp_path: Path):
+    py_file = tmp_path / "main.py"
+    ts_file = tmp_path / "app.ts"
+    md_file = tmp_path / "README.md"
+    xlsx_file = tmp_path / "data.xlsx"
+
+    for f in [py_file, ts_file, md_file]:
+        f.write_text("content")
+    wb = openpyxl.Workbook()
+    wb.active.append(["test"])
+    wb.save(xlsx_file)
+
+    ingester = LocalFileIngester(FileExtractor(), DeterministicEmbedder(32))
+    discovered = ingester.discover_files([MemoryRoot(scope="test", path=tmp_path)])
+    discovered_paths = [p for _, p in discovered]
+    assert md_file in discovered_paths
+    assert xlsx_file in discovered_paths
+    assert py_file not in discovered_paths
+    assert ts_file not in discovered_paths

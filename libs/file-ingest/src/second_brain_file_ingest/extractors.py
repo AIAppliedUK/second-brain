@@ -5,6 +5,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+import openpyxl
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError, PdfStreamError
 
@@ -21,41 +22,8 @@ class ExtractedContent:
 
 
 class FileExtractor:
-    plain_text_suffixes = {
-        ".c",
-        ".cc",
-        ".cpp",
-        ".cs",
-        ".css",
-        ".go",
-        ".gradle",
-        ".h",
-        ".hpp",
-        ".html",
-        ".java",
-        ".js",
-        ".json",
-        ".jsx",
-        ".kt",
-        ".kts",
-        ".md",
-        ".mjs",
-        ".py",
-        ".rb",
-        ".rs",
-        ".scala",
-        ".sh",
-        ".sql",
-        ".swift",
-        ".toml",
-        ".ts",
-        ".tsx",
-        ".txt",
-        ".xml",
-        ".yaml",
-        ".yml",
-    }
-    supported_suffixes = plain_text_suffixes | {".pdf", ".docx"}
+    plain_text_suffixes = {".md", ".txt"}
+    supported_suffixes = plain_text_suffixes | {".pdf", ".docx", ".xlsx", ".xls", ".archimate"}
 
     def extract(self, path: Path) -> ExtractedContent:
         suffix = path.suffix.lower()
@@ -71,11 +39,34 @@ class FileExtractor:
                 text = "\n".join((page.extract_text() or "") for page in reader.pages).strip()
             except (PdfReadError, PdfStreamError, OSError, ValueError) as exc:
                 raise FileExtractionError(f"Failed to extract PDF {path}: {exc}") from exc
-        else:
+        elif suffix == ".docx":
             try:
                 text = self._extract_docx(path)
             except (KeyError, OSError, ValueError, zipfile.BadZipFile) as exc:
                 raise FileExtractionError(f"Failed to extract DOCX {path}: {exc}") from exc
+        elif suffix == ".xlsx":
+            try:
+                text = self._extract_xlsx(path)
+            except (KeyError, OSError, ValueError, zipfile.BadZipFile) as exc:
+                raise FileExtractionError(f"Failed to extract XLSX {path}: {exc}") from exc
+        elif suffix == ".xls":
+            try:
+                text = self._extract_xls(path)
+            except FileExtractionError:
+                raise
+            except Exception as exc:
+                raise FileExtractionError(f"Failed to extract XLS {path}: {exc}") from exc
+        elif suffix == ".archimate":
+            try:
+                text = self._extract_archimate(path)
+            except FileExtractionError:
+                raise
+            except Exception as exc:
+                raise FileExtractionError(
+                    f"Failed to extract ArchiMate {path}: {exc}"
+                ) from exc
+        else:
+            raise FileExtractionError(f"Unsupported file type: {path.suffix}")
         if not text.strip():
             raise FileExtractionError(f"No extractable text found in {path}")
         return ExtractedContent(
@@ -92,3 +83,36 @@ class FileExtractor:
             if segment.startswith("w:t") and ">" in segment:
                 fragments.append(segment.split(">", 1)[1])
         return "".join(fragments).replace("&amp;", "&").strip()
+
+    def _extract_xls(self, path: Path) -> str:
+        raise FileExtractionError(f"XLS extraction not yet implemented: {path}")
+
+    def _extract_archimate(self, path: Path) -> str:
+        raise FileExtractionError(f"ArchiMate extraction not yet implemented: {path}")
+
+    def _extract_xlsx(self, path: Path) -> str:
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        try:
+            sections: list[str] = []
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                rows = list(ws.iter_rows(values_only=True))
+                # Filter to rows that have at least one non-None cell
+                non_empty_rows = [row for row in rows if any(cell is not None for cell in row)]
+                if not non_empty_rows:
+                    continue
+                lines: list[str] = [f"## Sheet: {sheet_name}"]
+                for row in non_empty_rows:
+                    cells: list[str] = []
+                    for cell in row:
+                        if cell is None:
+                            cells.append("")
+                        elif isinstance(cell, float) and cell == int(cell):
+                            cells.append(str(int(cell)))
+                        else:
+                            cells.append(str(cell))
+                    lines.append(" | ".join(cells))
+                sections.append("\n".join(lines))
+            return "\n\n".join(sections)
+        finally:
+            wb.close()
