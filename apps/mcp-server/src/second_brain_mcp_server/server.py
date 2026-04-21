@@ -4,6 +4,7 @@ from second_brain_models import (
     GetChunkContextRequest,
     GetSourceRequest,
     ListSourcesRequest,
+    RememberRequest,
     SearchMemoryRequest,
 )
 
@@ -38,6 +39,7 @@ def build_mcp_server(
         limit: int = 10,
         memory_scope: str | None = None,
         source_types: list[str] | None = None,
+        metadata_matches: dict[str, str] | None = None,
     ) -> dict:
         return service.search_memory(
             SearchMemoryRequest.model_validate(
@@ -45,7 +47,10 @@ def build_mcp_server(
                     "query": query,
                     "limit": limit,
                     "memory_scope": memory_scope,
-                    "filters": {"source_types": source_types or []},
+                    "filters": {
+                        "source_types": source_types or [],
+                        "metadata_matches": metadata_matches or {},
+                    },
                 }
             )
         )
@@ -69,5 +74,44 @@ def build_mcp_server(
         return service.list_sources(
             ListSourcesRequest(limit=limit, source_type=source_type, memory_scope=memory_scope)
         )
+
+    @server.tool()
+    def remember(
+        body: str,
+        title: str | None = None,
+        memory_scope: str | None = None,
+        source_type: str = "agent_memory",
+        external_id: str | None = None,
+        memory_kind: str = "episodic",
+        summary: str | None = None,
+        project: str | None = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
+        run_id: str | None = None,
+        significance: str | None = None,
+        happened_at: str | None = None,
+        tags: list[str] | None = None,
+        issue_refs: list[str] | None = None,
+        metadata: dict | None = None,
+    ) -> dict:
+        payload = {
+            "body": body,
+            "title": title,
+            "memory_scope": memory_scope,
+            "source_type": source_type,
+            "external_id": external_id,
+            "memory_kind": memory_kind,
+            "summary": summary,
+            "project": project,
+            "agent_id": agent_id,
+            "session_id": session_id,
+            "run_id": run_id,
+            "significance": significance,
+            "happened_at": happened_at,
+            "tags": tags or [],
+            "issue_refs": issue_refs or [],
+            "metadata": metadata or {},
+        }
+        return service.remember(RememberRequest.model_validate(payload))
 
     return server

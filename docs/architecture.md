@@ -188,9 +188,11 @@ Not included:
 
 - autonomous write-back to OneNote
 - cloud-hosted database
-- browser UI
 - app-only OneNote authentication
 - vector-only retrieval
+
+The browser-facing UI is implemented as the React app in `apps/web`, served by
+the Python API when the frontend build is present.
 
 ### 8. Definition of done for v1 foundation
 

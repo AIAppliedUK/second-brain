@@ -337,6 +337,45 @@ class SourceRepository:
             rows = cur.fetchall()
         return [SourceSummary(**row) for row in rows]
 
+    def list_memory_scopes(self) -> list[dict[str, Any]]:
+        with self.database.connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT
+                    memory_scope,
+                    COUNT(*)::integer AS source_count,
+                    COUNT(DISTINCT source_type)::integer AS source_type_count,
+                    MAX(updated_at) AS last_updated_at
+                FROM sources
+                GROUP BY memory_scope
+                ORDER BY MAX(updated_at) DESC NULLS LAST, memory_scope ASC
+                """
+            )
+            rows = cur.fetchall()
+        return list(rows)
+
+    def delete_memory_scope(self, memory_scope: str) -> dict[str, int]:
+        with self.database.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM audit_log
+                WHERE metadata ->> 'memory_scope' = %s
+                   OR source_id IN (SELECT id FROM sources WHERE memory_scope = %s)
+                """,
+                (memory_scope, memory_scope),
+            )
+            deleted_audit_events = cur.rowcount
+            cur.execute("DELETE FROM chunks WHERE memory_scope = %s", (memory_scope,))
+            deleted_chunks = cur.rowcount
+            cur.execute("DELETE FROM sources WHERE memory_scope = %s", (memory_scope,))
+            deleted_sources = cur.rowcount
+            conn.commit()
+        return {
+            "deleted_audit_events": deleted_audit_events,
+            "deleted_chunks": deleted_chunks,
+            "deleted_sources": deleted_sources,
+        }
+
 
 class ChunkRepository:
     def __init__(self, database: Database) -> None:
@@ -440,3 +479,28 @@ class AuditRepository:
                 {**event.model_dump(), "metadata": json.dumps(event.metadata)},
             )
             conn.commit()
+
+    def list_recent_failures(
+        self,
+        event_type: str | None = None,
+        limit: int = 10,
+        memory_scope: str | None = None,
+    ) -> list[dict[str, Any]]:
+        sql = """
+            SELECT created_at, event_type, status, message, metadata
+            FROM audit_log
+            WHERE status = 'failed'
+        """
+        params: list[Any] = []
+        if event_type:
+            sql += " AND event_type = %s"
+            params.append(event_type)
+        if memory_scope:
+            sql += " AND metadata ->> 'memory_scope' = %s"
+            params.append(memory_scope)
+        sql += " ORDER BY created_at DESC LIMIT %s"
+        params.append(limit)
+        with self.database.connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        return list(rows)

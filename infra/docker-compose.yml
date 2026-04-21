@@ -1,7 +1,9 @@
+name: second-brain
+
 services:
   postgres:
     image: pgvector/pgvector:pg17
-    container_name: second-brain-postgres
+    container_name: sb-postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: second_brain
@@ -22,7 +24,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    container_name: second-brain-mcp-server
+    container_name: sb-mcp-server
     restart: unless-stopped
     env_file:
       - ../.env
@@ -34,28 +36,51 @@ services:
       SECOND_BRAIN_MCP_STREAMABLE_HTTP_PATH: /mcp
     ports:
       - "${SECOND_BRAIN_MCP_BIND_PORT:-18000}:8000"
+    volumes:
+      - /Users/davidmcnabb/projects:/Users/davidmcnabb/projects:ro
     depends_on:
       postgres:
         condition: service_healthy
 
-  https-proxy:
-    image: caddy:2
-    container_name: second-brain-https-proxy
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: sb-api
     restart: unless-stopped
     env_file:
       - ../.env
+    environment:
+      SECOND_BRAIN_DB_DSN: postgresql://second_brain:second_brain@postgres:5432/second_brain
+      SECOND_BRAIN_API_PORT: 8090
+      SECOND_BRAIN_FRONTEND_DIST_DIR: /app/apps/web/dist
+    command: ["python", "-m", "second_brain_api.cli", "--host", "0.0.0.0", "--port", "8090"]
     ports:
-      - "80:80"
-      - "443:443"
+      - "${SECOND_BRAIN_API_BIND_PORT:-18090}:8090"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
+      - /Users/davidmcnabb/projects:/Users/davidmcnabb/projects:ro
     depends_on:
-      mcp-server:
-        condition: service_started
+      postgres:
+        condition: service_healthy
+
+  ingester-watch:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: sb-ingester-watch
+    cpus: 0.50
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      SECOND_BRAIN_DB_DSN: postgresql://second_brain:second_brain@postgres:5432/second_brain
+      SECOND_BRAIN_WATCH_INTERVAL_SECONDS: "60"
+    command: ["python", "-m", "second_brain_ingester.cli", "watch-files"]
+    volumes:
+      - /Users/davidmcnabb/projects:/Users/davidmcnabb/projects:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   postgres-data:
-  caddy-data:
-  caddy-config:

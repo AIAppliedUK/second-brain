@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
+
 from second_brain_core import ChunkingConfig, chunk_document
 from second_brain_core.embeddings import DeterministicEmbedder
 from second_brain_models import AuditEvent, CanonicalDocument, ChunkUpsert, SourceUpsert
 
-from .client import GraphClient
+from .client import GraphClient, GraphNotFoundError, GraphRateLimitError
 from .normalize import html_to_text
 
 
@@ -15,21 +18,63 @@ class OneNoteIngester:
         embedder: DeterministicEmbedder,
         memory_scope: str,
         chunking_config: ChunkingConfig | None = None,
+        request_delay_seconds: float = 0.5,
     ) -> None:
         self.graph_client = graph_client
         self.embedder = embedder
         self.memory_scope = memory_scope
         self.chunking_config = chunking_config or ChunkingConfig()
+        self.request_delay_seconds = request_delay_seconds
 
-    def ingest(self, since: str | None = None) -> tuple[list[CanonicalDocument], list[AuditEvent]]:
+    def ingest(
+        self,
+        since: str | None = None,
+        progress_callback: Callable[[int], None] | None = None,
+    ) -> tuple[list[CanonicalDocument], list[AuditEvent]]:
         notebooks = {item["id"]: item for item in self.graph_client.list_notebooks()}
         sections = {item["id"]: item for item in self.graph_client.list_sections()}
         documents: list[CanonicalDocument] = []
         events: list[AuditEvent] = []
         for section_id in sections:
-            pages = self.graph_client.list_pages_for_section(section_id, since=since)
+            try:
+                pages = self.graph_client.list_pages_for_section(section_id, since=since)
+            except GraphNotFoundError:
+                continue
+            except GraphRateLimitError as exc:
+                events.append(
+                    AuditEvent(
+                        event_type="onenote_sync",
+                        status="failed",
+                        message=str(exc),
+                        metadata={
+                            "section_id": section_id,
+                            "memory_scope": self.memory_scope,
+                        },
+                    )
+                )
+                continue
             for page in pages:
-                html = self.graph_client.get_page_content(page["id"])
+                try:
+                    html = self.graph_client.get_page_content(page["id"])
+                except GraphNotFoundError:
+                    continue
+                except GraphRateLimitError as exc:
+                    events.append(
+                        AuditEvent(
+                            event_type="onenote_sync",
+                            status="failed",
+                            message=str(exc),
+                            metadata={
+                                "page_id": page["id"],
+                                "section_id": section_id,
+                                "memory_scope": self.memory_scope,
+                            },
+                        )
+                    )
+                    continue
+                finally:
+                    if self.request_delay_seconds > 0:
+                        time.sleep(self.request_delay_seconds)
                 text = html_to_text(html)
                 notebook_id = page.get("parentNotebook", {}).get("id")
                 page_section_id = page.get("parentSection", {}).get("id", section_id)
@@ -89,4 +134,6 @@ class OneNoteIngester:
                         },
                     )
                 )
+                if progress_callback is not None:
+                    progress_callback(len(documents))
         return documents, events

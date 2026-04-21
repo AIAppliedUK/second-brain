@@ -1,7 +1,0 @@
-{
-	email {$SECOND_BRAIN_ACME_EMAIL}
-}
-
-{$SECOND_BRAIN_PUBLIC_HOSTNAME} {
-	reverse_proxy mcp-server:8000
-}

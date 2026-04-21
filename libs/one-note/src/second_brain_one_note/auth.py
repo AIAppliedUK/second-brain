@@ -6,6 +6,7 @@ import time
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 from urllib import parse, request
 from urllib.error import HTTPError
@@ -22,6 +23,7 @@ class DeviceCodeAuthProvider:
     token_cache_path: Path | None = None
     auto_open_browser: bool = True
     timeout_seconds: int = 30
+    on_device_code: Callable[[dict[str, Any]], None] | None = None
 
     def get_access_token(self) -> str:
         cached_tokens = self._load_cached_tokens()
@@ -39,6 +41,8 @@ class DeviceCodeAuthProvider:
         device_code = self._request_device_code()
         if self.auto_open_browser:
             self._open_verification_uri(device_code)
+        if self.on_device_code is not None:
+            self.on_device_code(device_code)
         if "message" in device_code:
             print(str(device_code["message"]))
         interval = int(device_code.get("interval", 5))
@@ -57,7 +61,9 @@ class DeviceCodeAuthProvider:
 
     def _request_device_code(self) -> dict[str, Any]:
         url = f"https://login.microsoftonline.com/{self.tenant_id}/oauth2/v2.0/devicecode"
-        response = self._post_form(url, {"client_id": self.client_id, "scope": " ".join(self.scopes)})
+        response = self._post_form(
+            url, {"client_id": self.client_id, "scope": " ".join(self.scopes)}
+        )
         if "error" in response:
             raise RuntimeError(f"Delegated device-code request failed: {response}")
         return response

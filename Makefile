@@ -1,10 +1,10 @@
 PYTHON ?= /opt/homebrew/bin/python3
 VENV_PYTHON = .venv/bin/python
 VENV_PIP = .venv/bin/pip
-PYTHONPATHS=apps/ingester/src:apps/retriever/src:apps/mcp-server/src:libs/core/src:libs/models/src:libs/file-ingest/src:libs/one-note/src
+PYTHONPATHS=apps/ingester/src:apps/retriever/src:apps/mcp-server/src:apps/api/src:libs/core/src:libs/models/src:libs/file-ingest/src:libs/one-note/src
 export PYTHONPATH=$(PYTHONPATHS)
 
-.PHONY: bootstrap up up-https down test lint format ingest watch ingest-onenote search mcp
+.PHONY: bootstrap up down test lint format ingest watch watch-logs watch-down ingest-onenote search mcp api web-install web-dev web-build
 
 bootstrap:
 	$(PYTHON) -m venv .venv
@@ -12,10 +12,7 @@ bootstrap:
 	$(VENV_PIP) install -e ".[dev]"
 
 up:
-	docker compose -f infra/docker-compose.yml up -d postgres mcp-server
-
-up-https:
-	docker compose -f infra/docker-compose.yml up -d postgres mcp-server https-proxy
+	docker compose -f infra/docker-compose.yml up -d postgres mcp-server api
 
 down:
 	docker compose -f infra/docker-compose.yml down
@@ -33,7 +30,13 @@ ingest:
 	$(VENV_PYTHON) -m second_brain_ingester.cli ingest-files
 
 watch:
-	$(VENV_PYTHON) -m second_brain_ingester.cli watch-files
+	docker compose -f infra/docker-compose.yml up -d postgres ingester-watch
+
+watch-logs:
+	docker compose -f infra/docker-compose.yml logs -f ingester-watch
+
+watch-down:
+	docker compose -f infra/docker-compose.yml stop ingester-watch
 
 ingest-onenote:
 	$(VENV_PYTHON) -m second_brain_ingester.cli ingest-onenote
@@ -43,3 +46,15 @@ search:
 
 mcp:
 	$(VENV_PYTHON) -m second_brain_mcp_server.cli
+
+api:
+	$(VENV_PYTHON) -m second_brain_api.cli --host 127.0.0.1 --port $${SECOND_BRAIN_API_PORT:-8090}
+
+web-install:
+	cd apps/web && npm install
+
+web-dev:
+	cd apps/web && npm run dev
+
+web-build:
+	cd apps/web && npm run build

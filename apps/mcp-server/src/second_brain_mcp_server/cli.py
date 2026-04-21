@@ -6,7 +6,7 @@ from second_brain_core.config import Settings
 from second_brain_core.db import Database
 from second_brain_core.embeddings import DeterministicEmbedder
 from second_brain_core.logging import configure_logging
-from second_brain_core.repository import ChunkRepository, SourceRepository
+from second_brain_core.repository import AuditRepository, ChunkRepository, SourceRepository
 from second_brain_core.retrieval import HybridRetriever
 
 from .server import build_mcp_server
@@ -48,15 +48,17 @@ def main() -> None:
     args = _parse_args()
     settings = Settings()
     database = Database(settings.db_dsn)
+    embedder = DeterministicEmbedder(settings.embedding_dimension)
     chunk_repository = ChunkRepository(database)
     source_repository = SourceRepository(database)
-    retriever = HybridRetriever(
-        chunk_repository, DeterministicEmbedder(settings.embedding_dimension)
-    )
+    audit_repository = AuditRepository(database)
+    retriever = HybridRetriever(chunk_repository, embedder)
     service = MCPService(
         retriever,
         source_repository,
         chunk_repository,
+        embedder,
+        audit_repository=audit_repository,
         default_memory_scope=settings.default_memory_scope,
     )
     transport = args.transport or settings.mcp_transport

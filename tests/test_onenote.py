@@ -5,7 +5,12 @@ from pathlib import Path
 from urllib.error import HTTPError
 
 from second_brain_core.embeddings import DeterministicEmbedder
-from second_brain_one_note import DeviceCodeAuthProvider, GraphClient, OneNoteIngester, RetryTransport
+from second_brain_one_note import (
+    DeviceCodeAuthProvider,
+    GraphClient,
+    OneNoteIngester,
+    RetryTransport,
+)
 
 
 class FakeTransport:
@@ -31,9 +36,7 @@ class FakeTransport:
                     }
                 ]
             }
-        return {
-            "value": []
-        }
+        return {"value": []}
 
     def request_text(self, url, headers):
         self.calls.append(url)
@@ -60,7 +63,9 @@ def test_graph_client_encodes_since_filter():
 
     client.list_pages_for_section("s1", since="2026-03-01T00:00:00Z")
 
-    assert transport.calls[0].startswith("https://graph.microsoft.com/v1.0/me/onenote/sections/s1/pages?")
+    assert transport.calls[0].startswith(
+        "https://graph.microsoft.com/v1.0/me/onenote/sections/s1/pages?"
+    )
     assert "%24filter=lastModifiedDateTime+ge+2026-03-01T00%3A00%3A00Z" in transport.calls[0]
 
 
@@ -84,6 +89,62 @@ class ErrorTransport:
         )
 
 
+class NotFoundTransport(FakeTransport):
+    def request_text(self, url, headers):
+        if "/me/onenote/pages/p1/content" in url:
+            raise HTTPError(
+                url,
+                404,
+                "Not Found",
+                hdrs=None,
+                fp=BytesIO(b'{"error":{"code":"ItemNotFound","message":"Not Found"}}'),
+            )
+        return super().request_text(url, headers)
+
+
+class RateLimitTransport(FakeTransport):
+    def request_json(self, url, headers):
+        if "sections?" in url:
+            return {"value": [{"id": "s1", "displayName": "Section"}]}
+        if "sections/s1/pages" in url:
+            return {
+                "value": [
+                    {
+                        "id": "p1",
+                        "title": "Rate limited page",
+                        "parentNotebook": {"id": "n1"},
+                        "parentSection": {"id": "s1"},
+                        "links": {"oneNoteWebUrl": {"href": "https://example.test/p1"}},
+                        "lastModifiedDateTime": "2025-01-01T00:00:00Z",
+                    },
+                    {
+                        "id": "p2",
+                        "title": "Recovered page",
+                        "parentNotebook": {"id": "n1"},
+                        "parentSection": {"id": "s1"},
+                        "links": {"oneNoteWebUrl": {"href": "https://example.test/p2"}},
+                        "lastModifiedDateTime": "2025-01-02T00:00:00Z",
+                    },
+                ]
+            }
+        return super().request_json(url, headers)
+
+    def request_text(self, url, headers):
+        if "/me/onenote/pages/p1/content" in url:
+            raise HTTPError(
+                url,
+                429,
+                "Too Many Requests",
+                hdrs=None,
+                fp=BytesIO(
+                    b'{"error":{"code":"20166","message":"The app has issued too many requests on behalf of this user in a short time period."}}'
+                ),
+            )
+        if "/me/onenote/pages/p2/content" in url:
+            return "<html><body><h1>Recovered page</h1><p>Important note</p></body></html>"
+        return super().request_text(url, headers)
+
+
 def test_retry_transport_includes_graph_error_body():
     client = GraphClient("token", RetryTransport(ErrorTransport(), retries=1), "agent")
 
@@ -99,11 +160,38 @@ def test_retry_transport_includes_graph_error_body():
     assert "graph.microsoft.com" in message
 
 
+def test_onenote_ingester_skips_missing_page_content():
+    transport = NotFoundTransport()
+    client = GraphClient("token", RetryTransport(transport, retries=1), "agent")
+
+    documents, events = OneNoteIngester(
+        client, DeterministicEmbedder(32), memory_scope="general"
+    ).ingest()
+
+    assert documents == []
+    assert events == []
+
+
+def test_onenote_ingester_continues_after_rate_limited_page():
+    transport = RateLimitTransport()
+    client = GraphClient("token", RetryTransport(transport, retries=1), "agent")
+
+    progress = []
+    documents, events = OneNoteIngester(
+        client, DeterministicEmbedder(32), memory_scope="general", request_delay_seconds=0.0
+    ).ingest(progress_callback=progress.append)
+
+    assert len(documents) == 1
+    assert documents[0].source.external_id == "p2"
+    assert [event.status for event in events] == ["failed", "success"]
+    assert progress == [1]
+
+
 def test_onenote_ingester_lists_pages_per_section():
     transport = FakeTransport()
     client = GraphClient("token", RetryTransport(transport, retries=1), "agent")
 
-    OneNoteIngester(client, DeterministicEmbedder(32), memory_scope="general").ingest()
+    OneNoteIngester(client, DeterministicEmbedder(32), memory_scope="general", request_delay_seconds=0.0).ingest()
 
     assert any("sections/s1/pages" in call for call in transport.calls)
     assert not any("/me/onenote/pages?" in call for call in transport.calls)
@@ -131,6 +219,8 @@ class FakeAuthProvider(DeviceCodeAuthProvider):
             "interval": "0",
             "message": "Use code ABC",
             "verification_uri": "https://login.microsoft.com/device",
+            "verification_uri_complete": "https://login.microsoft.com/device?code=ABC123",
+            "user_code": "ABC123",
         }
 
     def _request_token(self, device_code: str):
@@ -264,4 +354,30 @@ def test_device_code_provider_auto_opens_browser_when_login_is_needed(tmp_path):
 
     provider.get_access_token()
 
-    assert provider.opened_uris == ["https://login.microsoft.com/device"]
+    assert provider.opened_uris == ["https://login.microsoft.com/device?code=ABC123"]
+
+
+def test_device_code_provider_invokes_device_code_callback(tmp_path):
+    cache_path = tmp_path / "onenote-token.json"
+    captured = []
+    provider = FakeAuthProvider(
+        tenant_id="tenant",
+        client_id="client",
+        scopes=["offline_access", "Notes.Read.All", "User.Read"],
+        token_cache_path=cache_path,
+        auto_open_browser=False,
+        on_device_code=captured.append,
+        device_token_response={
+            "access_token": "device-access-token",
+            "refresh_token": "device-refresh-token",
+            "expires_in": "1800",
+        },
+    )
+
+    access_token = provider.get_access_token()
+
+    assert access_token == "device-access-token"
+    assert provider.opened_uris == []
+    assert len(captured) == 1
+    assert captured[0]["user_code"] == "ABC123"
+    assert captured[0]["verification_uri"] == "https://login.microsoft.com/device"

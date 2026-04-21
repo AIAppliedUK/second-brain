@@ -68,6 +68,7 @@ class FileExtractor:
                 raise FileExtractionError(f"Failed to extract ArchiMate {path}: {exc}") from exc
         else:
             raise FileExtractionError(f"Unsupported file type: {path.suffix}")
+        text = self._sanitize_text(text)
         if not text.strip():
             raise FileExtractionError(f"No extractable text found in {path}")
         return ExtractedContent(
@@ -75,6 +76,10 @@ class FileExtractor:
             metadata={"suffix": suffix, "size_bytes": str(path.stat().st_size)},
             content_hash=content_hash,
         )
+
+    def _sanitize_text(self, text: str) -> str:
+        # Some PDF/doc exports contain NUL bytes, which PostgreSQL text fields reject.
+        return text.replace("\x00", "")
 
     def _extract_docx(self, path: Path) -> str:
         with zipfile.ZipFile(path) as archive:
