@@ -7,6 +7,7 @@ from threading import Lock, Thread
 from time import time
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -98,6 +99,12 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="second-brain API",
         description="HTTP API for second-brain retrieval, ingestion, and source inspection.",
+    )
+    # No authentication, so only answer to loopback host names: a web page that rebinds its
+    # own domain to 127.0.0.1 (DNS rebinding) sends its own Host header and is rejected.
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=os.getenv("SECOND_BRAIN_API_ALLOWED_HOSTS", "localhost,127.0.0.1").split(","),
     )
     ingest_lock = Lock()
     ingest_status = IngestStatus()
@@ -302,7 +309,9 @@ def create_app() -> FastAPI:
             "root": str(browse_root),
             "current": str(current),
             "parent": parent,
-            "directories": [{"name": directory.name, "path": str(directory)} for directory in directories],
+            "directories": [
+                {"name": directory.name, "path": str(directory)} for directory in directories
+            ],
         }
 
     @app.post("/api/scopes")
@@ -319,7 +328,9 @@ def create_app() -> FastAPI:
     def _delete_scope(scope: str) -> dict:
         with ingest_lock:
             if ingest_status.state == "running":
-                raise HTTPException(status_code=409, detail="Cannot delete a scope while ingest is running")
+                raise HTTPException(
+                    status_code=409, detail="Cannot delete a scope while ingest is running"
+                )
 
         source_repository.delete_memory_scope(scope)
         remove_configured_memory_root(scope)

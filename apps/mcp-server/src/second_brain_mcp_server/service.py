@@ -19,6 +19,9 @@ from second_brain_models import (
     SourceUpsert,
 )
 
+# Source types written by the ingesters; remember() must never write these.
+INGESTED_SOURCE_TYPES = frozenset({"local_file", "onenote"})
+
 
 class MCPService:
     def __init__(
@@ -151,6 +154,10 @@ class MCPService:
         return {"sources": [source.model_dump(mode="json") for source in sources]}
 
     def remember(self, request: RememberRequest) -> dict:
+        if request.source_type in INGESTED_SOURCE_TYPES:
+            # Sources upsert by (scope, type, external_id): an ingester-owned type would let
+            # a caller replace a real file's or page's indexed text.
+            raise ValueError(f"source_type {request.source_type!r} is reserved for ingesters")
         memory_scope = self._resolve_write_memory_scope(request)
         happened_at = request.happened_at or datetime.now(UTC)
         title = request.title or self._default_memory_title(request)

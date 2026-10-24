@@ -437,3 +437,19 @@ def test_project_purge_is_skipped_when_the_parent_is_not_mounted(tmp_path: Path)
     (tmp_path / "empty").mkdir()
     assert remove_deleted_projects([tmp_path / "empty"], [], repo) == 0
     assert repo.calls == []
+
+
+def test_remember_refuses_to_overwrite_indexed_files_or_onenote_pages():
+    # remember() upserts by (scope, source_type, external_id); with an ingester-owned
+    # type a caller could replace a real file's indexed text with arbitrary content.
+    import pytest
+
+    from second_brain_models import RememberRequest
+
+    service = MCPService(_CapturingRetriever(), None, None, DeterministicEmbedder(8))
+    for source_type in ("local_file", "onenote"):
+        request = RememberRequest(
+            body="poisoned", source_type=source_type, external_id="/x/real.docx"
+        )
+        with pytest.raises(ValueError, match="source_type"):
+            service.remember(request)
