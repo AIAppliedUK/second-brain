@@ -16,9 +16,10 @@ def test_lexical_query_uses_tsvector_and_filters():
             "updated_after": datetime(2024, 1, 1, tzinfo=UTC),
         },
     )
-    assert "websearch_to_tsquery" in bundle.sql
+    assert "plainto_tsquery" in bundle.sql
     assert "ts_rank_cd" in bundle.sql
-    assert "c.tsv @@" in bundle.sql
+    assert "c.tsv @@ COALESCE(%(filter_tsq)s::tsquery, q.tsq)" in bundle.sql
+    assert bundle.params["filter_tsq"] is None
     assert "c.memory_scope = ANY" in bundle.sql
     assert "s.source_type = ANY" in bundle.sql
     assert "c.metadata ->>" in bundle.sql

@@ -58,11 +58,12 @@ def test_retriever_cli_builds_memory_scope_filters(monkeypatch, capsys):
     monkeypatch.setattr(cli, "Settings", lambda: StubSettings())
     monkeypatch.setattr(cli, "Database", lambda dsn: object())
     monkeypatch.setattr(cli, "ChunkRepository", lambda database: object())
-    monkeypatch.setattr(cli, "DeterministicEmbedder", lambda dimension: object())
+    monkeypatch.setattr(cli, "build_embedder", lambda settings: object())
+    monkeypatch.setattr(cli, "build_reranker", lambda settings: None)
     monkeypatch.setattr(
         cli,
         "HybridRetriever",
-        lambda chunk_repository, embedder: fake_retriever,
+        lambda chunk_repository, embedder, reranker=None: fake_retriever,
     )
     monkeypatch.setattr(
         sys,

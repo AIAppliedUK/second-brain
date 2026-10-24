@@ -93,6 +93,8 @@ class SearchRequest(BaseModel):
     lexical_limit: int = 25
     vector_limit: int = 25
     filters: SearchFilters = Field(default_factory=SearchFilters)
+    # Cross-encoder rerank of the fused candidates: better ranking, ~2s slower.
+    rerank: bool = False
 
 
 class SearchCitation(BaseModel):

@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 
 def _candidate_env_files() -> list[Path]:
@@ -64,6 +64,88 @@ def _parse_memory_roots(value: str) -> list[MemoryRoot]:
     return roots
 
 
+def local_env_path() -> Path | None:
+    for candidate in _candidate_env_files():
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def read_local_env() -> dict[str, str]:
+    env_path = local_env_path()
+    if env_path is None:
+        return {}
+    return {
+        key: value
+        for key, value in dotenv_values(env_path).items()
+        if key is not None and value is not None
+    }
+
+
+def serialize_memory_roots(roots: list[MemoryRoot]) -> str:
+    for root in roots:
+        if any(ch in f"{root.scope}{root.path}" for ch in ";|\r\n"):
+            raise ValueError(f"Memory root contains a reserved character: {root.scope!r}")
+    return ";".join(f"{root.scope}|{root.path.expanduser()}" for root in roots)
+
+
+def write_local_env_value(key: str, value: str) -> Path:
+    if "\n" in value or "\r" in value:
+        raise ValueError(f"Refusing to write a multi-line value for {key}")
+    env_path = local_env_path()
+    if env_path is None:
+        env_path = Path.cwd() / ".env"
+        lines: list[str] = []
+    else:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+
+    new_lines: list[str] = []
+    replaced = False
+    prefix = f"{key}="
+    for line in lines:
+        if line.startswith(prefix):
+            if not replaced:
+                new_lines.append(f"{key}={value}")
+                replaced = True
+            continue
+        new_lines.append(line)
+    if not replaced:
+        new_lines.append(f"{key}={value}")
+
+    env_path.write_text("\n".join(new_lines).rstrip() + "\n", encoding="utf-8")
+    os.environ[key] = value
+    return env_path
+
+
+def configured_memory_roots() -> list[MemoryRoot]:
+    env = read_local_env()
+    return _parse_memory_roots(env.get("SECOND_BRAIN_MEMORY_ROOTS", ""))
+
+
+def add_configured_memory_root(scope: str, path: str) -> list[MemoryRoot]:
+    roots = configured_memory_roots()
+    normalized_scope = scope.strip()
+    normalized_path = Path(path.strip()).expanduser()
+    updated = False
+    for root in roots:
+        if root.scope == normalized_scope:
+            root.path = normalized_path
+            updated = True
+            break
+    if not updated:
+        roots.append(MemoryRoot(scope=normalized_scope, path=normalized_path))
+    write_local_env_value("SECOND_BRAIN_MEMORY_ROOTS", serialize_memory_roots(roots))
+    return roots
+
+
+def remove_configured_memory_root(scope: str) -> list[MemoryRoot]:
+    roots = configured_memory_roots()
+    normalized_scope = scope.strip()
+    updated_roots = [root for root in roots if root.scope != normalized_scope]
+    write_local_env_value("SECOND_BRAIN_MEMORY_ROOTS", serialize_memory_roots(updated_roots))
+    return updated_roots
+
+
 @dataclass(slots=True)
 class Settings:
     db_dsn: str = field(
@@ -72,8 +154,25 @@ class Settings:
             "postgresql://second_brain:second_brain@127.0.0.1:5432/second_brain",
         )
     )
+    embedding_provider: str = field(
+        default_factory=lambda: os.getenv("SECOND_BRAIN_EMBEDDING_PROVIDER", "fastembed")
+    )
+    embedding_model: str = field(
+        default_factory=lambda: os.getenv("SECOND_BRAIN_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
+    )
+    # Empty string disables reranking.
+    reranker_model: str = field(
+        default_factory=lambda: os.getenv(
+            "SECOND_BRAIN_RERANKER_MODEL", "Xenova/ms-marco-MiniLM-L-12-v2"
+        )
+    )
+    # ONNX threads per model; 0 means one per host core. Set per container in compose.
+    model_threads: int = field(
+        default_factory=lambda: int(os.getenv("SECOND_BRAIN_MODEL_THREADS", "0"))
+    )
+    # Must match the vector(N) column in infra/postgres/init.sql.
     embedding_dimension: int = field(
-        default_factory=lambda: int(os.getenv("SECOND_BRAIN_EMBEDDING_DIMENSION", "256"))
+        default_factory=lambda: int(os.getenv("SECOND_BRAIN_EMBEDDING_DIMENSION", "384"))
     )
     file_roots: list[Path] = field(
         default_factory=lambda: [
@@ -85,6 +184,15 @@ class Settings:
     )
     memory_roots: list[MemoryRoot] = field(
         default_factory=lambda: _parse_memory_roots(os.getenv("SECOND_BRAIN_MEMORY_ROOTS", ""))
+    )
+    # Folders whose every subfolder is indexed as its own "project:<name>" scope,
+    # re-discovered on each pass so new and deleted projects need no config change.
+    project_parents: list[Path] = field(
+        default_factory=lambda: [
+            Path(item).expanduser()
+            for item in os.getenv("SECOND_BRAIN_PROJECT_PARENTS", "").split(";")
+            if item.strip()
+        ]
     )
     mcp_server_name: str = field(
         default_factory=lambda: os.getenv("SECOND_BRAIN_MCP_SERVER_NAME", "second-brain")
@@ -128,6 +236,11 @@ class Settings:
     onenote_timeout_seconds: int = field(
         default_factory=lambda: int(os.getenv("SECOND_BRAIN_ONENOTE_TIMEOUT_SECONDS", "30"))
     )
+    onenote_request_delay_seconds: float = field(
+        default_factory=lambda: float(
+            os.getenv("SECOND_BRAIN_ONENOTE_REQUEST_DELAY_SECONDS", "0.5")
+        )
+    )
     onenote_user_agent: str = field(
         default_factory=lambda: os.getenv("SECOND_BRAIN_ONENOTE_USER_AGENT", "second-brain/0.1.0")
     )
@@ -136,6 +249,19 @@ class Settings:
     )
 
     def resolved_memory_roots(self) -> list[MemoryRoot]:
-        if self.memory_roots:
-            return self.memory_roots
-        return [MemoryRoot(scope=self.default_memory_scope, path=path) for path in self.file_roots]
+        if not self.memory_roots and not self.project_parents:
+            return [
+                MemoryRoot(scope=self.default_memory_scope, path=path) for path in self.file_roots
+            ]
+        roots = list(self.memory_roots)
+        claimed = {root.path.resolve() for root in roots}
+        for parent in self.project_parents:
+            if not parent.is_dir():
+                continue
+            for child in sorted(parent.iterdir(), key=lambda item: item.name.lower()):
+                if child.name.startswith(".") or not child.is_dir():
+                    continue
+                if child.resolve() in claimed:  # an explicit root for this folder wins
+                    continue
+                roots.append(MemoryRoot(scope=f"project:{child.name}", path=child))
+        return roots

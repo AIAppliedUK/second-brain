@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import re
 import xml.etree.ElementTree as ET
 import zipfile
@@ -12,9 +13,36 @@ import xlrd
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError, PdfStreamError
 
+# Bump whenever extraction output changes, so already-indexed files are re-extracted
+# (the skip check otherwise only looks at mtime, size and file hash).
+EXTRACTOR_VERSION = "2"
+
 
 class FileExtractionError(RuntimeError):
     pass
+
+
+# OLE2 compound-file signature. A .docx/.xlsx starting with this is not a zip: it is a
+# password-protected (encrypted) OOXML file, or a legacy binary file renamed.
+_OLE2_SIGNATURE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
+# Text runs, paragraph ends, tabs and line breaks in word/document.xml, in document order.
+# `<w:t(?:\s[^>]*)?>` deliberately does not match <w:tab/> or <w:tbl>.
+_DOCX_TOKEN = re.compile(r"<w:t(?:\s[^>]*)?>([^<]*)</w:t>|</w:p>|<w:tab/>|<w:br\b[^>]*/>|<w:cr/>")
+
+
+def _format_cell(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
+def _format_row(values) -> str:
+    # Empty cells are dropped: keeping them produced chunks made of nothing but " | ".
+    return " | ".join(cell for cell in (_format_cell(value) for value in values) if cell)
 
 
 @dataclass(slots=True)
@@ -34,6 +62,10 @@ class FileExtractor:
             raise FileExtractionError(f"Unsupported file type: {path.suffix}")
         raw_bytes = path.read_bytes()
         content_hash = hashlib.sha256(raw_bytes).hexdigest()
+        if suffix in {".docx", ".xlsx"} and raw_bytes.startswith(_OLE2_SIGNATURE):
+            raise FileExtractionError(
+                f"Cannot extract {path}: file is password-protected (encrypted Office document)"
+            )
         if suffix in self.plain_text_suffixes:
             text = path.read_text(encoding="utf-8", errors="replace")
         elif suffix == ".pdf":
@@ -68,22 +100,36 @@ class FileExtractor:
                 raise FileExtractionError(f"Failed to extract ArchiMate {path}: {exc}") from exc
         else:
             raise FileExtractionError(f"Unsupported file type: {path.suffix}")
+        text = self._sanitize_text(text)
         if not text.strip():
             raise FileExtractionError(f"No extractable text found in {path}")
         return ExtractedContent(
             text=text.strip(),
-            metadata={"suffix": suffix, "size_bytes": str(path.stat().st_size)},
+            metadata={
+                "suffix": suffix,
+                "size_bytes": str(path.stat().st_size),
+                "extractor_version": EXTRACTOR_VERSION,
+            },
             content_hash=content_hash,
         )
+
+    def _sanitize_text(self, text: str) -> str:
+        # Some PDF/doc exports contain NUL bytes, which PostgreSQL text fields reject.
+        return text.replace("\x00", "")
 
     def _extract_docx(self, path: Path) -> str:
         with zipfile.ZipFile(path) as archive:
             document = archive.read("word/document.xml").decode("utf-8", errors="ignore")
         fragments: list[str] = []
-        for segment in document.replace("</w:p>", "\n").split("<"):
-            if segment.startswith("w:t") and ">" in segment:
-                fragments.append(segment.split(">", 1)[1])
-        return "".join(fragments).replace("&amp;", "&").strip()
+        for match in _DOCX_TOKEN.finditer(document):
+            text, tag = match.group(1), match.group(0)
+            if text is not None:
+                fragments.append(html.unescape(text))
+            elif tag == "</w:p>" or tag.startswith(("<w:br", "<w:cr")):
+                fragments.append("\n")
+            else:  # <w:tab/>
+                fragments.append(" ")
+        return "".join(fragments).strip()
 
     def _extract_xls(self, path: Path) -> str:
         wb = xlrd.open_workbook(str(path))
@@ -92,17 +138,11 @@ class FileExtractor:
             ws = wb.sheet_by_index(sheet_index)
             if ws.nrows == 0:
                 continue
-            rows: list[str] = []
-            for row_index in range(ws.nrows):
-                cells: list[str] = []
-                for col_index in range(ws.ncols):
-                    cell = ws.cell(row_index, col_index)
-                    if cell.ctype == xlrd.XL_CELL_NUMBER:
-                        value = cell.value
-                        cells.append(str(int(value)) if value == int(value) else str(value))
-                    else:
-                        cells.append(str(cell.value))
-                rows.append(" | ".join(cells))
+            rows = [
+                row
+                for row in (_format_row(ws.row_values(row_index)) for row_index in range(ws.nrows))
+                if row
+            ]
             if not rows:
                 continue
             lines: list[str] = [f"## Sheet: {ws.name}"] + rows
@@ -269,23 +309,12 @@ class FileExtractor:
             sections: list[str] = []
             for sheet_name in wb.sheetnames:
                 ws = wb[sheet_name]
-                rows = list(ws.iter_rows(values_only=True))
-                # Filter to rows that have at least one non-None cell
-                non_empty_rows = [row for row in rows if any(cell is not None for cell in row)]
-                if not non_empty_rows:
+                rows = [
+                    row for row in (_format_row(r) for r in ws.iter_rows(values_only=True)) if row
+                ]
+                if not rows:
                     continue
-                lines: list[str] = [f"## Sheet: {sheet_name}"]
-                for row in non_empty_rows:
-                    cells: list[str] = []
-                    for cell in row:
-                        if cell is None:
-                            cells.append("")
-                        elif isinstance(cell, float) and cell == int(cell):
-                            cells.append(str(int(cell)))
-                        else:
-                            cells.append(str(cell))
-                    lines.append(" | ".join(cells))
-                sections.append("\n".join(lines))
+                sections.append("\n".join([f"## Sheet: {sheet_name}", *rows]))
             return "\n\n".join(sections)
         finally:
             wb.close()

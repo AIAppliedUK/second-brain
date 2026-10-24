@@ -5,7 +5,12 @@ from pathlib import Path
 from urllib.error import HTTPError
 
 from second_brain_core.embeddings import DeterministicEmbedder
-from second_brain_one_note import DeviceCodeAuthProvider, GraphClient, OneNoteIngester, RetryTransport
+from second_brain_one_note import (
+    DeviceCodeAuthProvider,
+    GraphClient,
+    OneNoteIngester,
+    RetryTransport,
+)
 
 
 class FakeTransport:

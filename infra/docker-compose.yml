@@ -1,14 +1,32 @@
+# Pinned so the volume is always second-brain_postgres-data, whatever directory compose runs from.
+name: second-brain
+
+x-app: &app
+  image: second-brain:latest
+  restart: unless-stopped
+  env_file:
+    - ../.env
+  volumes:
+    # Must cover every path in SECOND_BRAIN_MEMORY_ROOTS; roots outside it are skipped
+    # with a "Memory root is not readable" warning at ingester start-up.
+    - /Users/davidmcnabb/projects:/Users/davidmcnabb/projects:ro
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+# Host ports bind to loopback only: the API has no authentication and Postgres uses a
+# default password. Remote MCP access goes through the https-proxy profile instead.
 services:
   postgres:
     image: pgvector/pgvector:pg17
-    container_name: second-brain-postgres
+    container_name: sb-postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: second_brain
       POSTGRES_USER: second_brain
       POSTGRES_PASSWORD: second_brain
     ports:
-      - "${SECOND_BRAIN_DB_PORT:-55432}:5432"
+      - "127.0.0.1:${SECOND_BRAIN_DB_PORT:-55432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -19,29 +37,80 @@ services:
       retries: 20
 
   mcp-server:
+    <<: *app
     build:
       context: ..
       dockerfile: Dockerfile
-    container_name: second-brain-mcp-server
-    restart: unless-stopped
-    env_file:
-      - ../.env
+    container_name: sb-mcp-server
+    command: ["python", "-m", "second_brain_mcp_server.cli"]
     environment:
       SECOND_BRAIN_DB_DSN: postgresql://second_brain:second_brain@postgres:5432/second_brain
       SECOND_BRAIN_MCP_TRANSPORT: streamable-http
       SECOND_BRAIN_MCP_HOST: 0.0.0.0
       SECOND_BRAIN_MCP_PORT: 8000
       SECOND_BRAIN_MCP_STREAMABLE_HTTP_PATH: /mcp
+      SECOND_BRAIN_MODEL_THREADS: "6"  # idle between searches; deep-search reranking bursts
     ports:
-      - "${SECOND_BRAIN_MCP_BIND_PORT:-18000}:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
+      - "127.0.0.1:${SECOND_BRAIN_MCP_BIND_PORT:-18000}:8000"
+
+  api:
+    <<: *app
+    container_name: sb-api
+    command: ["python", "-m", "second_brain_api.cli", "--host", "0.0.0.0", "--port", "8090"]
+    environment:
+      SECOND_BRAIN_DB_DSN: postgresql://second_brain:second_brain@postgres:5432/second_brain
+      # Folder picker and new scopes are confined to this (mounted) directory.
+      SECOND_BRAIN_BROWSE_ROOT: /Users/davidmcnabb/projects
+      SECOND_BRAIN_MODEL_THREADS: "6"  # idle between searches; deep-search reranking bursts
+    ports:
+      - "127.0.0.1:${SECOND_BRAIN_API_BIND_PORT:-18090}:8090"
+
+  ingester-watch:
+    <<: *app
+    container_name: sb-ingester-watch
+    # Interval comes from SECOND_BRAIN_WATCH_INTERVAL_SECONDS in .env. OneDrive is left
+    # to ingester-onedrive, which only runs on mains power.
+    command:
+      - python
+      - -m
+      - second_brain_ingester.cli
+      - watch-files
+      - --exclude-scope
+      - AI Applied Folder
+    # Embedding is CPU-bound; cap it so a full re-index cannot starve the Mac.
+    cpus: 2
+    mem_limit: 3g
+    environment:
+      SECOND_BRAIN_DB_DSN: postgresql://second_brain:second_brain@postgres:5432/second_brain
+      SECOND_BRAIN_MODEL_THREADS: "2"
+
+  ingester-onedrive:
+    <<: *app
+    container_name: sb-ingester-onedrive
+    profiles: ["onedrive"]
+    # Started on AC power and stopped on battery by scripts/onedrive-power-gate.sh
+    # (LaunchAgent), so never restarted by Docker on its own.
+    restart: "no"
+    command:
+      - python
+      - -m
+      - second_brain_ingester.cli
+      - watch-files
+      - --scope
+      - AI Applied Folder
+    cpus: 2
+    mem_limit: 3g
+    volumes:
+      - /Users/davidmcnabb/Library/CloudStorage/OneDrive-AIApplied/AIApplied:/Users/davidmcnabb/Library/CloudStorage/OneDrive-AIApplied/AIApplied:ro
+    environment:
+      SECOND_BRAIN_DB_DSN: postgresql://second_brain:second_brain@postgres:5432/second_brain
+      SECOND_BRAIN_MODEL_THREADS: "2"
 
   https-proxy:
     image: caddy:2
-    container_name: second-brain-https-proxy
+    container_name: sb-https-proxy
     restart: unless-stopped
+    profiles: ["https"]
     env_file:
       - ../.env
     ports:
