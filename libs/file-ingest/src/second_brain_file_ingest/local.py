@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
 from second_brain_core import ChunkingConfig, chunk_document
 from second_brain_core.config import MemoryRoot
-from second_brain_core.embeddings import DeterministicEmbedder
+from second_brain_core.embeddings import Embedder
 from second_brain_models import AuditEvent, CanonicalDocument, ChunkUpsert, SourceUpsert
 
 from .extractors import ExtractedContent, FileExtractionError, FileExtractor
@@ -35,6 +36,15 @@ def _parse_markdown_sections(text: str) -> list[tuple[list[str], str]]:
     return sections or [([], text)]
 
 
+# A chunk is worth indexing only if it has at least one real word (2+ letters);
+# this drops markdown rules, empty table rows and number-only spreadsheet fragments.
+_SEARCHABLE_WORD = re.compile(r"[^\W\d_]{2,}")
+
+
+def _has_searchable_words(text: str) -> bool:
+    return _SEARCHABLE_WORD.search(text) is not None
+
+
 def _default_sections(text: str) -> list[tuple[list[str], str]]:
     blocks = [block.strip() for block in text.split("\n\n") if block.strip()]
     return [([], block) for block in blocks] or [([], text)]
@@ -43,6 +53,9 @@ def _default_sections(text: str) -> list[tuple[list[str], str]]:
 class LocalFileIngester:
     ignored_directory_names = {
         ".build",
+        # Claude Code agent state (sprint logs, reviews, worktrees): churns constantly
+        # and buries the project's own documents in search results.
+        ".claude",
         ".git",
         ".venv",
         ".next",
@@ -72,7 +85,6 @@ class LocalFileIngester:
         "playwright-report",
     }
     ignored_path_prefixes = {
-        (".claude", "sprint-state", "reviews"),
         ("docker", "volume", "state"),
         ("volume", "state"),
     }
@@ -80,7 +92,7 @@ class LocalFileIngester:
     def __init__(
         self,
         extractor: FileExtractor,
-        embedder: DeterministicEmbedder,
+        embedder: Embedder,
         chunking_config: ChunkingConfig | None = None,
     ) -> None:
         self.extractor = extractor
@@ -105,13 +117,24 @@ class LocalFileIngester:
                     and not self._is_ignored_relative_path(root.path, current_dir / dirname)
                 ]
                 for filename in filenames:
+                    # "~$Name.docx" are Office owner/lock files, never real documents.
+                    if filename.startswith("~$"):
+                        continue
                     path = current_dir / filename
                     if (
                         path.suffix.lower() in self.extractor.supported_suffixes
                         and not self._is_ignored_relative_path(root.path, path)
+                        and not self._is_empty(path)
                     ):
                         files.append((root, path))
         return sorted(files, key=lambda item: str(item[1]))
+
+    @staticmethod
+    def _is_empty(path: Path) -> bool:
+        try:
+            return path.stat().st_size == 0
+        except OSError:
+            return True
 
     def _is_ignored_relative_path(self, root_path: Path, path: Path) -> bool:
         try:
@@ -140,7 +163,16 @@ class LocalFileIngester:
                 if path.suffix.lower() == ".md"
                 else _default_sections(extracted.text)
             )
-            chunk_tuples = chunk_document(extracted.text, sections, self.chunking_config)
+            chunk_tuples = [
+                (heading_path, chunk_text)
+                for heading_path, chunk_text in chunk_document(
+                    extracted.text, sections, self.chunking_config
+                )
+                if _has_searchable_words(chunk_text)
+            ]
+            if not chunk_tuples:
+                raise FileExtractionError(f"No searchable text found in {path}")
+            embeddings = self.embedder.embed_many([chunk_text for _, chunk_text in chunk_tuples])
             container_parts = (
                 list(path.resolve().relative_to(root_path.resolve()).parts[:-1])
                 if root_path is not None and path.resolve().is_relative_to(root_path.resolve())
@@ -175,9 +207,11 @@ class LocalFileIngester:
                     chunk_text=chunk_text,
                     token_count=len(chunk_text.split()),
                     metadata={"path": str(path.resolve()), "memory_scope": memory_scope},
-                    embedding=self.embedder.embed(chunk_text),
+                    embedding=embedding,
                 )
-                for index, (heading_path, chunk_text) in enumerate(chunk_tuples)
+                for index, ((heading_path, chunk_text), embedding) in enumerate(
+                    zip(chunk_tuples, embeddings, strict=True)
+                )
             ]
             return CanonicalDocument(source=source, chunks=chunks), AuditEvent(
                 source_id=source.id,

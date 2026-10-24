@@ -35,6 +35,7 @@ CREATE INDEX IF NOT EXISTS idx_sources_memory_scope ON sources (memory_scope);
 CREATE INDEX IF NOT EXISTS idx_sources_source_type ON sources (source_type);
 CREATE INDEX IF NOT EXISTS idx_sources_updated_at ON sources (updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sources_metadata ON sources USING GIN (metadata);
+CREATE INDEX IF NOT EXISTS idx_sources_status ON sources (status);
 
 CREATE TABLE IF NOT EXISTS chunks (
     id UUID PRIMARY KEY,
@@ -45,7 +46,8 @@ CREATE TABLE IF NOT EXISTS chunks (
     chunk_text TEXT NOT NULL,
     token_count INTEGER NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-    embedding vector(256),
+    -- Must equal SECOND_BRAIN_EMBEDDING_DIMENSION (384 for BAAI/bge-small-en-v1.5).
+    embedding vector(384),
     tsv TSVECTOR GENERATED ALWAYS AS (
         to_tsvector('english', COALESCE(chunk_text, ''))
     ) STORED,
@@ -66,9 +68,11 @@ CREATE INDEX IF NOT EXISTS idx_chunks_source_id ON chunks (source_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_heading_path ON chunks USING GIN (heading_path);
 CREATE INDEX IF NOT EXISTS idx_chunks_metadata ON chunks USING GIN (metadata);
 CREATE INDEX IF NOT EXISTS idx_chunks_tsv ON chunks USING GIN (tsv);
+-- HNSW, not ivfflat: ivfflat's lists are fixed when the index is built (it was built
+-- with lists=100 over an empty table and then held 19.6M rows), while HNSW stays
+-- accurate as the table grows and supports iterative scans for filtered queries.
 CREATE INDEX IF NOT EXISTS idx_chunks_embedding
-    ON chunks USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100);
+    ON chunks USING hnsw (embedding vector_cosine_ops);
 
 CREATE TABLE IF NOT EXISTS audit_log (
     id UUID PRIMARY KEY,

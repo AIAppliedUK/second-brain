@@ -16,6 +16,7 @@ from .mcp import (
     GetChunkContextRequest,
     GetSourceRequest,
     ListSourcesRequest,
+    RememberRequest,
     SearchMemoryRequest,
 )
 
@@ -27,6 +28,7 @@ __all__ = [
     "GetChunkContextRequest",
     "GetSourceRequest",
     "ListSourcesRequest",
+    "RememberRequest",
     "SearchCitation",
     "SearchFilters",
     "SearchHit",

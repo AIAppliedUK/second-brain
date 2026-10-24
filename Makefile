@@ -12,10 +12,10 @@ bootstrap:
 	$(VENV_PIP) install -e ".[dev]"
 
 up:
-	docker compose -f infra/docker-compose.yml up -d postgres mcp-server
+	docker compose -f infra/docker-compose.yml up -d --build
 
 up-https:
-	docker compose -f infra/docker-compose.yml up -d postgres mcp-server https-proxy
+	docker compose -f infra/docker-compose.yml --profile https up -d --build
 
 down:
 	docker compose -f infra/docker-compose.yml down

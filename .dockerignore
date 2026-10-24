@@ -1,0 +1,13 @@
+.git
+.venv
+.env
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+*.egg-info
+build
+second-brain-starter.zip
+apps/web/node_modules
+apps/web/dist

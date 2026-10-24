@@ -54,7 +54,8 @@ def test_discover_files_skips_virtualenv_and_cache_dirs(tmp_path: Path):
 
 
 def test_discover_files_skips_generated_dirs_and_volume_state(tmp_path: Path):
-    kept_result = tmp_path / ".claude" / "sprint-state" / "results" / "summary.md"
+    kept_result = tmp_path / "docs" / "summary.md"
+    skipped_agent_state = tmp_path / ".claude" / "sprint-state" / "results" / "summary.md"
     skipped_volume = tmp_path / "docker" / "volume" / "state" / "ses" / "message.txt"
     skipped_target = tmp_path / "backend" / "target" / "surefire-reports" / "TEST-report.xml"
     skipped_dist = tmp_path / "ui" / "dist" / "assets" / "app.js"
@@ -64,6 +65,7 @@ def test_discover_files_skips_generated_dirs_and_volume_state(tmp_path: Path):
 
     for path in [
         kept_result,
+        skipped_agent_state,
         skipped_volume,
         skipped_target,
         skipped_dist,

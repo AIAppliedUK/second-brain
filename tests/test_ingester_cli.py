@@ -3,6 +3,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from second_brain_core.config import MemoryRoot
+from second_brain_file_ingest.extractors import EXTRACTOR_VERSION
 from second_brain_ingester.cli import process_local_file
 from second_brain_models import (
     AuditEvent,
@@ -107,7 +108,7 @@ def test_process_local_file_skips_when_mtime_and_size_match(tmp_path: Path):
         title=path.name,
         uri=path.resolve().as_uri(),
         content_hash="same",
-        metadata={"size_bytes": str(path.stat().st_size)},
+        metadata={"size_bytes": str(path.stat().st_size), "extractor_version": EXTRACTOR_VERSION},
         updated_at=mtime,
     )
     result = process_local_file(

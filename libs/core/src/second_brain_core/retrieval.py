@@ -1,29 +1,44 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Protocol
 
 from second_brain_models import SearchCitation, SearchHit, SearchRequest, SearchResponse
 
-from .embeddings import DeterministicEmbedder
+from .embeddings import Embedder
 from .repository import ChunkRepository, build_lexical_query, build_vector_query
 
 
 @dataclass(slots=True)
 class RetrievalConfig:
-    lexical_weight: float = 0.45
-    vector_weight: float = 0.55
+    # Keep the weights close: with RRF's k=60, a 0.55/0.45 split let vector ranks 1-14
+    # outscore lexical rank 1, so disjoint lexical hits never reached the top 10.
+    lexical_weight: float = 1.0
+    vector_weight: float = 1.0
+    # Fused candidates handed to the reranker (if any). Measured on the question set:
+    # 20 matched 40 on accuracy at a third of the latency.
+    rerank_candidates: int = 20
+    # Cross-encoder cost grows with passage length; 0 keeps whole chunks.
+    rerank_passage_words: int = 0
+
+
+class Reranker(Protocol):
+    def score(self, query: str, passages: Sequence[str]) -> list[float]: ...
 
 
 class HybridRetriever:
     def __init__(
         self,
         chunk_repository: ChunkRepository,
-        embedder: DeterministicEmbedder,
+        embedder: Embedder,
         config: RetrievalConfig | None = None,
+        reranker: Reranker | None = None,
     ) -> None:
         self.chunk_repository = chunk_repository
         self.embedder = embedder
         self.config = config or RetrievalConfig()
+        self.reranker = reranker
 
     def search(self, request: SearchRequest) -> SearchResponse:
         filters = request.filters.model_dump()
@@ -41,6 +56,8 @@ class HybridRetriever:
         )
         vector_hits = self.chunk_repository.vector_search(vector_bundle)
         merged = self._merge_hits(lexical_hits, vector_hits)
+        if request.rerank and self.reranker is not None and merged:
+            merged = self._rerank(request.query, merged[: self.config.rerank_candidates])
         results = [
             SearchHit(
                 chunk_id=chunk.id,
@@ -70,6 +87,29 @@ class HybridRetriever:
             for chunk in merged[: request.limit]
         ]
         return SearchResponse(query=request.query, hits=results)
+
+    def _rerank(self, query: str, candidates):
+        # Title and heading give the cross-encoder context the bare chunk often lacks.
+        passages = [
+            " > ".join(
+                part
+                for part in [chunk.source.title if chunk.source else "", *chunk.heading_path]
+                if part
+            )
+            + "\n"
+            + self._truncate(chunk.chunk_text)
+            for chunk in candidates
+        ]
+        scores = self.reranker.score(query, passages)
+        for chunk, score in zip(candidates, scores, strict=True):
+            chunk.combined_score = score
+        return sorted(candidates, key=lambda chunk: chunk.combined_score, reverse=True)
+
+    def _truncate(self, text: str) -> str:
+        limit = self.config.rerank_passage_words
+        if not limit:
+            return text
+        return " ".join(text.split()[:limit])
 
     def _merge_hits(self, lexical_hits, vector_hits):
         merged = {}

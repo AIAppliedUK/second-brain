@@ -5,7 +5,7 @@ import json
 
 from second_brain_core.config import Settings
 from second_brain_core.db import Database
-from second_brain_core.embeddings import DeterministicEmbedder
+from second_brain_core.embeddings import build_embedder, build_reranker
 from second_brain_core.logging import configure_logging
 from second_brain_core.repository import ChunkRepository
 from second_brain_core.retrieval import HybridRetriever
@@ -30,7 +30,8 @@ def main() -> None:
     settings = Settings()
     retriever = HybridRetriever(
         chunk_repository=ChunkRepository(Database(settings.db_dsn)),
-        embedder=DeterministicEmbedder(settings.embedding_dimension),
+        embedder=build_embedder(settings),
+        reranker=build_reranker(settings),
     )
     response = retriever.search(
         SearchRequest(

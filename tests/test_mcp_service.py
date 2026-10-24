@@ -1,5 +1,6 @@
 from uuid import uuid4
 
+from second_brain_core.embeddings import DeterministicEmbedder
 from second_brain_mcp_server.service import MCPService
 from second_brain_models import (
     GetSourceRequest,
@@ -55,7 +56,12 @@ def test_mcp_service_routes_requests():
         content_hash="hash",
         metadata={},
     )
-    service = MCPService(FakeRetriever(), FakeSourceRepository(source), FakeChunkRepository())
+    service = MCPService(
+        FakeRetriever(),
+        FakeSourceRepository(source),
+        FakeChunkRepository(),
+        DeterministicEmbedder(8),
+    )
     assert (
         service.search_memory(SearchMemoryRequest(query="hello", limit=1)).get("query") == "query"
     )

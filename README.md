@@ -46,6 +46,7 @@ The core flow is:
   - `get_source`
   - `get_chunk_context`
   - `list_sources`
+  - `remember`
 - provenance and citations on retrieval results
 - tests for chunking, retrieval, ingestion, OneNote sync, and MCP behavior
 
@@ -88,12 +89,71 @@ Typical scopes:
 
 This means you can use one Postgres instance and one MCP server, but still retrieve only the memory relevant to the current project.
 
+### Agent memory
+
+Agents can now write structured memory entries directly through MCP with the `remember` tool.
+
+This is intended for:
+
+- episodic memory from one session
+- activity memory such as daily work logs
+- sprint memory that spans multiple sessions
+- notable findings, decisions, and issue implementation notes
+
+Recommended pattern:
+
+- keep using `memory_scope` for the main boundary such as `project:second-brain`
+- use `source_type=agent_memory` for agent-authored records
+- use `memory_kind` to distinguish `episodic`, `activity`, `sprint`, or `finding`
+- include `project`, `agent_id`, `session_id`, `run_id`, `issue_refs`, `tags`, and `significance`
+- retrieve with `search_memory` plus `source_types=["agent_memory"]` and optional `metadata_matches`
+
+Example MCP write:
+
+```json
+{
+  "tool": "remember",
+  "arguments": {
+    "memory_scope": "project:second-brain",
+    "memory_kind": "activity",
+    "title": "2026-04-07 daily progress",
+    "summary": "Implemented issue #42 and fixed heading-aware ingestion behavior.",
+    "body": "Implemented GitHub issue #42. Significant finding: agent memories should be stored as first-class sources so they keep provenance and work with hybrid retrieval.",
+    "project": "second-brain",
+    "agent_id": "codex",
+    "session_id": "session-2026-04-07",
+    "issue_refs": ["#42"],
+    "tags": ["github", "ingestion", "memory"],
+    "significance": "high"
+  }
+}
+```
+
+Example retrieval:
+
+```json
+{
+  "tool": "search_memory",
+  "arguments": {
+    "query": "issue 42 ingestion finding",
+    "memory_scope": "project:second-brain",
+    "source_types": ["agent_memory"],
+    "metadata_matches": {
+      "memory_kind": "activity",
+      "project": "second-brain"
+    }
+  }
+}
+```
+
 ## Repository layout
 
 ```text
 second-brain/
   apps/
+    api/
     ingester/
+    web/
     retriever/
     mcp-server/
   libs/
@@ -240,7 +300,27 @@ Run incremental watch mode:
 make watch
 ```
 
-`watch-files` is polling-based, intentionally simple, and designed for local reliability.
+Tail the watcher logs:
+
+```bash
+make watch-logs
+```
+
+Stop the watcher:
+
+```bash
+make watch-down
+```
+
+`make watch` now runs the polling watcher in Docker so it sees the same mounted
+project folders as the MCP server. `watch-files` is intentionally simple and
+designed for local reliability.
+
+To keep CPU usage modest across larger code folders, the Docker watcher polls
+every 15 seconds by default and skips common build and cache directories such as
+`node_modules`, `dist`, `build`, `coverage`, `.next`, `.turbo`, and `target`.
+You can tune the polling interval with `SECOND_BRAIN_WATCH_INTERVAL_SECONDS` in
+[`.env`](/Users/davidmcnabb/projects/second-brain/.env).
 
 ### OneNote
 
@@ -343,12 +423,6 @@ Start the always-on Dockerized MCP service:
 make up
 ```
 
-Start the HTTPS-published stack for remote clients such as Manus:
-
-```bash
-make up-https
-```
-
 This compose stack now runs:
 
 - PostgreSQL in Docker on `127.0.0.1:55432`
@@ -356,29 +430,9 @@ This compose stack now runs:
 
 If you want a different host port for the MCP container, set `SECOND_BRAIN_MCP_BIND_PORT` in [`.env`](/Users/davidmcnabb/projects/second-brain/.env).
 
-The MCP server still supports stdio for local agent clients, but it can now also run as a remote `streamable-http` service for tools that prefer a persistent endpoint.
-
-### Public HTTPS for Manus
-
-Manus requires your MCP server to be reachable over public HTTPS.
-
-To publish this stack over HTTPS:
-
-1. set `SECOND_BRAIN_PUBLIC_HOSTNAME` in [`.env`](/Users/davidmcnabb/projects/second-brain/.env) to a real DNS name such as `mcp.example.com`
-2. set `SECOND_BRAIN_ACME_EMAIL` to an email address for certificate issuance
-3. point that DNS name at the machine running Docker
-4. ensure inbound ports `80` and `443` reach that machine
-5. run:
-
-```bash
-make up-https
-```
-
-The HTTPS URL Manus, Claude, and Codex should use in that setup is:
-
-```text
-https://YOUR_HOSTNAME/mcp
-```
+The MCP server still supports stdio for local agent clients, but it can also run
+as a remote `streamable-http` service for tools that prefer a persistent
+endpoint.
 
 Available tools:
 

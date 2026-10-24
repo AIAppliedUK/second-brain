@@ -26,11 +26,19 @@ class UrlLibTransport:
             return response.read().decode("utf-8")
 
 
+class GraphNotFoundError(RuntimeError):
+    pass
+
+
+class GraphRateLimitError(RuntimeError):
+    pass
+
+
 @dataclass(slots=True)
 class RetryTransport:
     base_transport: GraphTransport
-    retries: int = 3
-    backoff_seconds: float = 1.0
+    retries: int = 5
+    backoff_seconds: float = 2.0
 
     def request_json(self, url: str, headers: dict[str, str]) -> dict:
         for attempt in range(1, self.retries + 1):
@@ -39,8 +47,7 @@ class RetryTransport:
             except HTTPError as exc:
                 if exc.code != 429 or attempt == self.retries:
                     raise _graph_http_error(exc, url) from exc
-                retry_after = exc.headers.get("Retry-After")
-                time.sleep(float(retry_after) if retry_after else self.backoff_seconds * attempt)
+                time.sleep(_retry_delay_seconds(exc, attempt, self.backoff_seconds))
         raise RuntimeError("Unreachable retry state")
 
     def request_text(self, url: str, headers: dict[str, str]) -> str:
@@ -50,8 +57,7 @@ class RetryTransport:
             except HTTPError as exc:
                 if exc.code != 429 or attempt == self.retries:
                     raise _graph_http_error(exc, url) from exc
-                retry_after = exc.headers.get("Retry-After")
-                time.sleep(float(retry_after) if retry_after else self.backoff_seconds * attempt)
+                time.sleep(_retry_delay_seconds(exc, attempt, self.backoff_seconds))
         raise RuntimeError("Unreachable retry state")
 
 
@@ -105,4 +111,18 @@ def _graph_http_error(exc: HTTPError, url: str) -> RuntimeError:
     message = f"Graph request failed with HTTP {exc.code} for {url}"
     if body:
         message += f": {body}"
+    if exc.code == 429:
+        return GraphRateLimitError(message)
+    if exc.code == 404:
+        return GraphNotFoundError(message)
     return RuntimeError(message)
+
+
+def _retry_delay_seconds(exc: HTTPError, attempt: int, backoff_seconds: float) -> float:
+    retry_after = exc.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return max(float(retry_after), 0.0)
+        except ValueError:
+            pass
+    return backoff_seconds * (2 ** (attempt - 1))

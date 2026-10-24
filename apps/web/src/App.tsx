@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useEffectEvent, useRef, useState, type ReactNode } from 'react'
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import './App.css'
 import {
   createScope,
@@ -245,7 +253,7 @@ export default function App() {
       pollIngestStatus()
     }, 2000)
     return () => window.clearInterval(timer)
-  }, [ingestStatus.state])
+  }, [ingestStatus.state, pollIngestStatus])
 
   async function runSearch(event?: React.FormEvent) {
     event?.preventDefault()
@@ -256,10 +264,11 @@ export default function App() {
     setMode('searching')
     setLoadingSearch(true)
     setControlFeedback('')
-    setResults(null)
     try {
       const payload = await fetchSearch(trimmed, searchScope, sourceType)
-      setResults(payload)
+      startTransition(() => {
+        setResults(payload)
+      })
     } catch (error) {
       setControlFeedback(error instanceof Error ? error.message : 'Search failed.')
     } finally {
